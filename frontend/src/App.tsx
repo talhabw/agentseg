@@ -14,9 +14,12 @@ import { useProjectStore } from './stores/projectStore';
 import { useAnnotationStore } from './stores/annotationStore';
 import { useUIStore } from './stores/uiStore';
 import { useNotifications } from './hooks/useNotifications';
+import { preloadImage } from './utils/imageCache';
+import { runYoloOnCurrentImage, startAutoYolo, stopAutoYolo } from './utils/yoloRunner';
 import * as api from './api/client';
 
 const queryClient = new QueryClient();
+const PREFETCH_LOOKAHEAD_IMAGES = 10;
 
 // Helper to compute bounding box IoU for client-side duplicate detection
 function bboxIoU(box1: number[], box2: number[]): number {
@@ -39,6 +42,54 @@ function bboxIoU(box1: number[], box2: number[]): number {
   return unionArea > 0 ? interArea / unionArea : 0;
 }
 
+function bboxDuplicateScore(box1: number[], box2: number[]): number {
+  const [x1a, y1a, x2a, y2a] = box1;
+  const [x1b, y1b, x2b, y2b] = box2;
+
+  const x1 = Math.max(x1a, x1b);
+  const y1 = Math.max(y1a, y1b);
+  const x2 = Math.min(x2a, x2b);
+  const y2 = Math.min(y2a, y2b);
+  const intersection = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  if (intersection <= 0) return 0;
+
+  const w1 = Math.max(0, x2a - x1a);
+  const h1 = Math.max(0, y2a - y1a);
+  const w2 = Math.max(0, x2b - x1b);
+  const h2 = Math.max(0, y2b - y1b);
+  const area1 = w1 * h1;
+  const area2 = w2 * h2;
+  const containment = intersection / Math.max(1, Math.min(area1, area2));
+  const iou = bboxIoU(box1, box2);
+
+  const cx1 = (x1a + x2a) / 2;
+  const cy1 = (y1a + y2a) / 2;
+  const cx2 = (x1b + x2b) / 2;
+  const cy2 = (y1b + y2b) / 2;
+  const centerDistance = Math.hypot(cx1 - cx2, cy1 - cy2);
+  const smallerDiag = Math.hypot(Math.min(w1, w2), Math.min(h1, h2));
+
+  return smallerDiag > 0 && centerDistance <= smallerDiag * 0.5
+    ? Math.max(iou, containment)
+    : iou;
+}
+
+function isBatchDuplicate(
+  labelId: number,
+  bbox: number[],
+  existingResults: Array<{ label_id: number; bbox: [number, number, number, number] }>,
+  threshold: number,
+): { duplicate: boolean; score: number } {
+  for (const existing of existingResults) {
+    const score = bboxDuplicateScore(bbox, existing.bbox);
+    const requiredScore = existing.label_id === labelId ? threshold : Math.max(threshold, 0.9);
+    if (score >= requiredScore) {
+      return { duplicate: true, score };
+    }
+  }
+  return { duplicate: false, score: 0 };
+}
+
 // Module-level state - truly synchronous, survives React re-renders
 let _propagationLock = false;
 let _lastPropagationTime = 0;
@@ -46,6 +97,9 @@ let _propagationRequestId = 0;
 let _pendingAutoNext = false; // Flag to trigger auto-next after annotations load
 const _sessionFailedImageIds = new Set<number>(); // Track failed images in current session (skip mode)
 let _performancePropagationActive = false; // Performance mode loop active
+
+const NAVIGATION_LOAD_DEBOUNCE_MS = 90;
+const LAST_IMAGE_INDEX_SAVE_DEBOUNCE_MS = 180;
 
 // Export function to stop auto-tracking (used by UI components)
 // eslint-disable-next-line react-refresh/only-export-components
@@ -150,7 +204,7 @@ async function runPerformancePropagation() {
     const failedLabels = new Set<number>();
     let duplicateSkipCount = 0;
 
-    const { sizeMinRatio, sizeMaxRatio, stopOnSizeMismatch, topK, propagationMode, iouVerify, iouThreshold } = useUIStore.getState();
+    const { sizeMinRatio, sizeMaxRatio, stopOnSizeMismatch, topK, useBBoxHint, bboxHintScale, pruneThinArtifacts, propagationMode, iouVerify, iouThreshold, trackingDuplicateThreshold } = useUIStore.getState();
 
     for (const ann of sourceAnnotations) {
       if (!ann.bbox) continue;
@@ -165,15 +219,15 @@ async function runPerformancePropagation() {
             sourceImageId, targetImageId, ann.id,
             {
               mode: propagationMode, iouVerify, iouThreshold,
-              useCachedMasks: true, sizeMinRatio, sizeMaxRatio,
-              stopOnSizeMismatch, topK, skipDuplicateThreshold: 0.9,
+              useCachedMasks: true, useBBoxHint, bboxHintScale, pruneThinArtifacts, sizeMinRatio, sizeMaxRatio,
+              stopOnSizeMismatch, topK, skipDuplicateThreshold: trackingDuplicateThreshold,
             }
           );
         } else {
           result = await api.propagate(
             sourceImageId, targetImageId, ann.id,
             sizeMinRatio, sizeMaxRatio, stopOnSizeMismatch,
-            0.9, topK
+            trackingDuplicateThreshold, topK, useBBoxHint, bboxHintScale, pruneThinArtifacts
           );
         }
 
@@ -182,16 +236,14 @@ async function runPerformancePropagation() {
           continue;
         }
 
-        // Client-side batch duplicate check
-        const BBOX_IOU_THRESHOLD = 0.85;
-        let isDuplicate = false;
-        for (const existing of propagationResults) {
-          if (bboxIoU(result.bbox, existing.bbox) >= BBOX_IOU_THRESHOLD) {
-            isDuplicate = true;
-            break;
-          }
-        }
-        if (isDuplicate) {
+        const batchDuplicate = isBatchDuplicate(
+          ann.label_id,
+          result.bbox,
+          propagationResults,
+          trackingDuplicateThreshold,
+        );
+        if (batchDuplicate.duplicate) {
+          console.log(`[PERF] Batch duplicate for label ${ann.label_id} (score=${batchDuplicate.score.toFixed(3)}), skipping`);
           duplicateSkipCount++;
           continue;
         }
@@ -230,12 +282,25 @@ async function runPerformancePropagation() {
               fallbackResult.annotation.image_id, targetImageId, fallbackResult.annotation.id,
               {
                 mode: propagationMode, iouVerify, iouThreshold,
-                useCachedMasks: true, sizeMinRatio, sizeMaxRatio,
-                stopOnSizeMismatch, topK, skipDuplicateThreshold: 0.9,
+                useCachedMasks: true, useBBoxHint, bboxHintScale, pruneThinArtifacts, sizeMinRatio, sizeMaxRatio,
+                stopOnSizeMismatch, topK, skipDuplicateThreshold: trackingDuplicateThreshold,
               }
             );
 
             if (result.duplicate_skipped) {
+              duplicateSkipCount++;
+              fallbackSuccess = true;
+              continue;
+            }
+
+            const batchDuplicate = isBatchDuplicate(
+              labelId,
+              result.bbox,
+              propagationResults,
+              trackingDuplicateThreshold,
+            );
+            if (batchDuplicate.duplicate) {
+              console.log(`[PERF] Fallback batch duplicate for label ${labelId} (score=${batchDuplicate.score.toFixed(3)}), skipping`);
               duplicateSkipCount++;
               fallbackSuccess = true;
               continue;
@@ -277,6 +342,7 @@ async function runPerformancePropagation() {
         console.error(`[PERF] Failed to create annotation:`, err);
       }
     }
+    useAnnotationStore.getState().invalidateAnnotations(targetImageId);
 
     // Update progress
     const progress = useUIStore.getState().performanceProgress;
@@ -409,32 +475,87 @@ function AppContent() {
 
   // Load annotations when image changes
   useEffect(() => {
-    if (currentImage) {
-      loadAnnotations(currentImage.id).then(() => {
-        // Check if we should continue auto-propagation
-        if (_pendingAutoNext) {
-          _pendingAutoNext = false;
-          const { autoNext, trackModeEnabled } = useUIStore.getState();
-          const { currentImageIndex: idx, images: imgs } = useProjectStore.getState();
-          
-          if (autoNext && trackModeEnabled && idx < imgs.length - 1 && !_propagationLock) {
-            const { performanceMode } = useUIStore.getState();
-            if (performanceMode && !_performancePropagationActive) {
-              // Performance mode: run tight loop without UI updates
-              runPerformancePropagation();
-            } else if (!performanceMode) {
-              // Normal mode: small delay to let React render
-              setTimeout(() => handlePropagateAndNext(), 50);
-            }
-            // If performance propagation is already active, do nothing (it manages its own loop)
-          }
-        }
-      });
-    } else {
+    if (!currentImage) {
       clearAnnotations();
+      return;
     }
+
+    clearAnnotations();
+
+    let cancelled = false;
+    const abortController = new AbortController();
+    const loadDelay = _pendingAutoNext ? 0 : NAVIGATION_LOAD_DEBOUNCE_MS;
+
+    const timeoutId = window.setTimeout(() => {
+      loadAnnotations(currentImage.id, abortController.signal)
+        .then(() => {
+          if (cancelled || abortController.signal.aborted) return;
+
+          // Check if we should continue auto-propagation
+          if (_pendingAutoNext) {
+            _pendingAutoNext = false;
+            const { autoNext, trackModeEnabled } = useUIStore.getState();
+            const { currentImageIndex: idx, images: imgs } = useProjectStore.getState();
+
+            if (autoNext && trackModeEnabled && idx < imgs.length - 1 && !_propagationLock) {
+              const { performanceMode } = useUIStore.getState();
+              if (performanceMode && !_performancePropagationActive) {
+                // Performance mode: run tight loop without UI updates
+                runPerformancePropagation();
+              } else if (!performanceMode) {
+                // Normal mode: small delay to let React render
+                setTimeout(() => handlePropagateAndNext(), 50);
+              }
+              // If performance propagation is already active, do nothing (it manages its own loop)
+            }
+          }
+        })
+        .catch((err) => {
+          if (abortController.signal.aborted) return;
+          console.error('Failed to load annotations:', err);
+        });
+    }, loadDelay);
+
+    return () => {
+      cancelled = true;
+      abortController.abort();
+      window.clearTimeout(timeoutId);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentImage?.id]); // Only re-run on image change; callbacks read fresh store state
+
+  // Warm browser/API caches for the next few frames so navigation feels instant.
+  useEffect(() => {
+    if (!project || images.length === 0) return;
+
+    const upcomingImages = images.slice(
+      currentImageIndex + 1,
+      currentImageIndex + 1 + PREFETCH_LOOKAHEAD_IMAGES
+    );
+    if (upcomingImages.length === 0) return;
+
+    useAnnotationStore.getState().prefetchAnnotations(upcomingImages.map((img) => img.id));
+
+    for (const img of upcomingImages) {
+      const src = api.getOptimizedImageUrl(img.id, 2048, 85, project.id);
+      void preloadImage(src).catch(() => {
+        // Prefetch is best-effort; the active image loader will surface real errors.
+      });
+    }
+  }, [project, images, currentImageIndex]);
+
+  // Persist last visited image index after navigation settles.
+  useEffect(() => {
+    if (!project || !currentImage) return;
+
+    const timeoutId = window.setTimeout(() => {
+      api.setSetting('last_image_index', String(currentImageIndex)).catch(() => {});
+    }, LAST_IMAGE_INDEX_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [project?.id, currentImage?.id, currentImageIndex]);
 
   // Load labels when project changes
   useEffect(() => {
@@ -643,7 +764,7 @@ function AppContent() {
           console.log(`${logPrefix} Propagating annotation ${i + 1}/${sourceAnnotations.length} (id=${ann.id})`);
 
           // Get propagation settings from store
-          const { sizeMinRatio, sizeMaxRatio, stopOnSizeMismatch, topK, propagationMode, iouVerify, iouThreshold } = useUIStore.getState();
+          const { sizeMinRatio, sizeMaxRatio, stopOnSizeMismatch, topK, useBBoxHint, bboxHintScale, pruneThinArtifacts, propagationMode, iouVerify, iouThreshold, trackingDuplicateThreshold } = useUIStore.getState();
           
           // Use advanced propagation API when mode is not 'peak' or IoU verification is enabled
           const useAdvancedApi = propagationMode !== 'peak' || iouVerify;
@@ -659,11 +780,14 @@ function AppContent() {
                 iouVerify,
                 iouThreshold,
                 useCachedMasks: true,
+                useBBoxHint,
+                bboxHintScale,
+                pruneThinArtifacts,
                 sizeMinRatio,
                 sizeMaxRatio,
                 stopOnSizeMismatch,
                 topK,
-                skipDuplicateThreshold: 0.9,  // Skip if 90%+ overlap with existing
+                skipDuplicateThreshold: trackingDuplicateThreshold,
               }
             );
           } else {
@@ -674,8 +798,11 @@ function AppContent() {
               sizeMinRatio,
               sizeMaxRatio,
               stopOnSizeMismatch,
-              0.9,  // skipDuplicateThreshold - skip if 90%+ overlap with existing
-              topK
+              trackingDuplicateThreshold,
+              topK,
+              useBBoxHint,
+              bboxHintScale,
+              pruneThinArtifacts
             );
           }
 
@@ -695,19 +822,15 @@ function AppContent() {
             continue;  // Don't add to propagationResults
           }
 
-          // Client-side duplicate check: compare against results already in this batch
-          // This catches duplicates that haven't been saved to DB yet
-          const BBOX_IOU_THRESHOLD = 0.85;  // Use bbox IoU as proxy for mask IoU
-          let isBatchDuplicate = false;
-          for (const existing of propagationResults) {
-            const iou = bboxIoU(result.bbox, existing.bbox);
-            if (iou >= BBOX_IOU_THRESHOLD) {
-              console.log(`${logPrefix} Batch duplicate detected for ann ${ann.id} (bbox IoU=${iou.toFixed(3)}), skipping`);
-              isBatchDuplicate = true;
-              break;
-            }
-          }
-          if (isBatchDuplicate) {
+          // Client-side duplicate check catches same-batch duplicates that have not been saved yet.
+          const batchDuplicate = isBatchDuplicate(
+            ann.label_id,
+            result.bbox,
+            propagationResults,
+            trackingDuplicateThreshold,
+          );
+          if (batchDuplicate.duplicate) {
+            console.log(`${logPrefix} Batch duplicate detected for ann ${ann.id} (score=${batchDuplicate.score.toFixed(3)}), skipping`);
             duplicateSkipCount++;
             continue;
           }
@@ -765,7 +888,7 @@ function AppContent() {
               console.log(`${logPrefix} Found fallback for label ${labelId} at image index ${fallbackResult.image_index} (attempt ${attempt + 1})`);
 
               // Get settings again
-              const { sizeMinRatio, sizeMaxRatio, stopOnSizeMismatch, topK, propagationMode, iouVerify, iouThreshold } = useUIStore.getState();
+              const { sizeMinRatio, sizeMaxRatio, stopOnSizeMismatch, topK, useBBoxHint, bboxHintScale, pruneThinArtifacts, propagationMode, iouVerify, iouThreshold, trackingDuplicateThreshold } = useUIStore.getState();
 
               // Propagate from the fallback reference
               const result = await api.propagateAdvanced(
@@ -777,11 +900,14 @@ function AppContent() {
                   iouVerify,
                   iouThreshold,
                   useCachedMasks: true,
+                  useBBoxHint,
+                  bboxHintScale,
+                  pruneThinArtifacts,
                   sizeMinRatio,
                   sizeMaxRatio,
                   stopOnSizeMismatch,
                   topK,
-                  skipDuplicateThreshold: 0.9,
+                  skipDuplicateThreshold: trackingDuplicateThreshold,
                 }
               );
 
@@ -800,18 +926,14 @@ function AppContent() {
                 continue;
               }
 
-              // Client-side batch duplicate check
-              const BBOX_IOU_THRESHOLD = 0.85;
-              let isBatchDuplicate = false;
-              for (const existing of propagationResults) {
-                const iou = bboxIoU(result.bbox, existing.bbox);
-                if (iou >= BBOX_IOU_THRESHOLD) {
-                  console.log(`${logPrefix} Fallback batch duplicate for label ${labelId} (bbox IoU=${iou.toFixed(3)}), skipping`);
-                  isBatchDuplicate = true;
-                  break;
-                }
-              }
-              if (isBatchDuplicate) {
+              const batchDuplicate = isBatchDuplicate(
+                labelId,
+                result.bbox,
+                propagationResults,
+                trackingDuplicateThreshold,
+              );
+              if (batchDuplicate.duplicate) {
+                console.log(`${logPrefix} Fallback batch duplicate for label ${labelId} (score=${batchDuplicate.score.toFixed(3)}), skipping`);
                 duplicateSkipCount++;
                 fallbackSuccess = true;
                 continue;
@@ -884,6 +1006,7 @@ function AppContent() {
                 console.error(`${logPrefix} Failed to create annotation:`, err);
               }
             }
+            useAnnotationStore.getState().invalidateAnnotations(targetImageId);
           }
 
           // Navigate to the failed image so user can manually annotate
@@ -941,6 +1064,7 @@ function AppContent() {
           console.error(`${logPrefix} Failed to create tracked annotation:`, err);
         }
       }
+      useAnnotationStore.getState().invalidateAnnotations(targetImageId);
 
       // Final check before navigation  
       if (currentRequestId !== _propagationRequestId) {
@@ -1106,6 +1230,12 @@ function AppContent() {
         }
       }
 
+      // During auto YOLO, only allow Escape to stop after the current image finishes.
+      if (useUIStore.getState().autoYoloEnabled && e.key.toLowerCase() !== 'escape') {
+        e.preventDefault();
+        return;
+      }
+
       // Read fresh state from stores
       const { trackModeEnabled: trackEnabled, reviewModeEnabled: reviewEnabled, mode: currentMode, propagationLoaded: propLoaded, loadPropagation: loadProp, setMode: setModeAction, setTrackMode: setTrack, setReviewMode: setReview } = useUIStore.getState();
       const { selectedAnnotationId: selectedAnn, refinePoints: points, clearRefinePoints: clearPoints } = useAnnotationStore.getState();
@@ -1181,11 +1311,21 @@ function AppContent() {
         case 'q':
           setReview(!reviewEnabled);
           break;
-        case 'y':
         case '1':
-          // Approve (Y for Yes, 1 for quick access)
+          // Approve selected annotation while reviewing.
           if (reviewEnabled && selectedAnn) {
             handleApprove();
+          }
+          break;
+        case 'y':
+          if (e.shiftKey) {
+            if (useUIStore.getState().autoYoloEnabled) {
+              stopAutoYolo();
+            } else {
+              startAutoYolo();
+            }
+          } else {
+            runYoloOnCurrentImage();
           }
           break;
         case 'n':
@@ -1214,8 +1354,10 @@ function AppContent() {
           }
           break;
         case 'escape':
-          // Stop auto-tracking if in progress, otherwise clear points
-          if (useUIStore.getState().autoNext) {
+          // Stop auto workflows if in progress, otherwise clear points
+          if (useUIStore.getState().autoYoloEnabled) {
+            stopAutoYolo();
+          } else if (useUIStore.getState().autoNext) {
             stopAutoTracking();
             useUIStore.getState().setAutoNext(false);
             useUIStore.getState().addToast('Auto-tracking cancelled', 'info', 1500);

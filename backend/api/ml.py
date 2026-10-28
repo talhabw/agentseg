@@ -8,8 +8,8 @@ import traceback
 import numpy as np
 import torch
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
+from typing import Any, Optional
 from PIL import Image
 
 from ml.segment import get_segment_service, clear_segment_service
@@ -26,7 +26,13 @@ from ml.propagate import (
 )
 from core.masks import mask_to_rle, rle_to_mask, mask_iou
 from core.polygons import mask_to_yolo_polygon
-from backend.api.projects import get_store
+from core.store import ProjectStore
+from backend.api.projects import get_project, get_store
+from backend.yolo_autoannotate import (
+    YoloAnnotateOptions,
+    run_yolo_on_image,
+    run_yolo_on_project,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,10 +79,44 @@ class SegmentResponse(BaseModel):
     bbox: list[float]  # refined bbox
 
 
+class YoloAnnotateRequest(BaseModel):
+    model_path: str
+    confidence: float = 0.25
+    iou: float = 0.7
+    imgsz: Optional[int] = None
+    max_detections: int = 300
+    device: str = "cuda"
+    class_filter: Optional[list[str]] = None
+    use_sam: bool = True
+    use_yolo_masks: bool = True
+    status: str = "pending"
+    duplicate_threshold: float = 0.85
+    replace_existing_yolo: bool = False
+
+
+class YoloRunImageRequest(YoloAnnotateRequest):
+    image_id: int
+    replace_existing_yolo: bool = True
+
+
+class YoloRunResponse(BaseModel):
+    images_processed: int
+    detections: int
+    created: int
+    skipped_duplicates: int
+    failed: int
+    sam_failures: int
+    labels_created: int
+    per_image: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class PropagateRequest(BaseModel):
     source_image_id: int
     target_image_id: int
     source_annotation_id: int
+    use_bbox_hint: bool = True
+    bbox_hint_scale: float = 1.15  # Scale applied to the tracking bbox hint
+    prune_thin_artifacts: bool = True
     size_min_ratio: float = 0.8  # Min allowed size ratio (e.g., 0.8x)
     size_max_ratio: float = 1.2  # Max allowed size ratio (e.g., 1.2x)
     stop_on_size_mismatch: bool = (
@@ -117,6 +157,121 @@ def _load_image(image_id: int) -> tuple[np.ndarray, int, int]:
         return np.array(pil_img), image.width, image.height
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load image: {e}")
+
+
+def _find_duplicate_annotation(
+    store,
+    existing_annotations,
+    new_bbox: list[float],
+    new_mask: Optional[np.ndarray],
+    source_label_id: int,
+    threshold: float,
+) -> tuple[bool, float, str | None]:
+    """Find an existing annotation that is effectively the same target object.
+
+    Tracking can make multiple same-class source objects collapse onto the same
+    target object. Mask IoU alone misses bbox-only annotations. Different-label
+    conflicts stay stricter to avoid suppressing nearby legitimate classes.
+    """
+    if threshold <= 0:
+        return False, 0.0, None
+
+    same_label_threshold = threshold
+    different_label_threshold = max(threshold, 0.9)
+
+    for existing_ann in existing_annotations:
+        score = _annotation_overlap_score(existing_ann, new_bbox, new_mask)
+        if score <= 0:
+            continue
+
+        is_same_label = existing_ann.label_id == source_label_id
+        required_score = same_label_threshold if is_same_label else different_label_threshold
+        if score < required_score:
+            continue
+
+        if is_same_label:
+            logger.info(
+                "Skipping duplicate same-label annotation (overlap=%.3f with ann %s)",
+                score,
+                existing_ann.id,
+            )
+            return True, score, None
+
+        existing_label = store.get_label_by_id(existing_ann.label_id)
+        conflicting_label_name = (
+            existing_label.name if existing_label else f"label_{existing_ann.label_id}"
+        )
+        logger.info(
+            "Skipping - location already labeled as '%s' (overlap=%.3f with ann %s)",
+            conflicting_label_name,
+            score,
+            existing_ann.id,
+        )
+        return True, score, conflicting_label_name
+
+    return False, 0.0, None
+
+
+def _annotation_overlap_score(
+    annotation,
+    new_bbox: list[float],
+    new_mask: Optional[np.ndarray],
+) -> float:
+    """Return the best available overlap score for duplicate detection."""
+    scores: list[float] = []
+
+    if new_mask is not None and annotation.mask_rle:
+        try:
+            existing_mask = rle_to_mask(annotation.mask_rle)
+            if existing_mask.shape == new_mask.shape:
+                scores.append(mask_iou(new_mask, existing_mask))
+        except Exception as e:
+            logger.warning("Failed to compare masks for duplicate detection: %s", e)
+
+    if annotation.bbox_xyxy:
+        scores.append(_bbox_duplicate_score(new_bbox, annotation.bbox_xyxy))
+
+    return max(scores) if scores else 0.0
+
+
+def _bbox_duplicate_score(bbox1: list[float], bbox2: list[float]) -> float:
+    """Score bbox overlap for duplicate detection.
+
+    IoU catches similarly sized boxes. Intersection over the smaller box catches
+    cases where SAM/YOLO makes one box slightly tighter than the other while the
+    centers still refer to the same object.
+    """
+    x1 = max(bbox1[0], bbox2[0])
+    y1 = max(bbox1[1], bbox2[1])
+    x2 = min(bbox1[2], bbox2[2])
+    y2 = min(bbox1[3], bbox2[3])
+
+    if x2 <= x1 or y2 <= y1:
+        return 0.0
+
+    intersection = (x2 - x1) * (y2 - y1)
+    w1 = max(0.0, bbox1[2] - bbox1[0])
+    h1 = max(0.0, bbox1[3] - bbox1[1])
+    w2 = max(0.0, bbox2[2] - bbox2[0])
+    h2 = max(0.0, bbox2[3] - bbox2[1])
+    area1 = w1 * h1
+    area2 = w2 * h2
+    union = area1 + area2 - intersection
+    iou = intersection / union if union > 0 else 0.0
+
+    smaller_area = min(area1, area2)
+    containment = intersection / smaller_area if smaller_area > 0 else 0.0
+    cx1 = (bbox1[0] + bbox1[2]) / 2
+    cy1 = (bbox1[1] + bbox1[3]) / 2
+    cx2 = (bbox2[0] + bbox2[2]) / 2
+    cy2 = (bbox2[1] + bbox2[3]) / 2
+    center_distance = float(np.hypot(cx1 - cx2, cy1 - cy2))
+    smaller_diag = float(np.hypot(min(w1, w2), min(h1, h2)))
+
+    if smaller_diag > 0 and center_distance <= smaller_diag * 0.5:
+        return max(float(iou), float(containment))
+
+    return float(iou)
 
 
 # ==================== SAM Endpoints ====================
@@ -295,6 +450,65 @@ async def segment(request: SegmentRequest):
         raise HTTPException(status_code=500, detail=f"Segmentation failed: {e}")
 
 
+# ==================== YOLO Auto-Annotation Endpoints ====================
+
+
+@router.post("/yolo/image", response_model=YoloRunResponse)
+def yolo_annotate_image(request: YoloRunImageRequest):
+    """Run YOLO-assisted annotation on one image."""
+    current_store = get_store()
+    store = ProjectStore(current_store.db_path)
+    try:
+        options = _yolo_options_from_request(request)
+        summary = run_yolo_on_image(store, request.image_id, options)
+        return YoloRunResponse(**summary.to_dict())
+    except Exception as e:
+        logger.error("YOLO image annotation failed: %s", e)
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"YOLO annotation failed: {e}")
+    finally:
+        store.close()
+
+
+@router.post("/yolo/project", response_model=YoloRunResponse)
+def yolo_annotate_project(request: YoloAnnotateRequest):
+    """Run YOLO-assisted annotation on all images in the current project."""
+    current_store = get_store()
+    store = ProjectStore(current_store.db_path)
+    project = get_project()
+    try:
+        options = _yolo_options_from_request(request)
+        summary = run_yolo_on_project(store, project.id, options)
+        return YoloRunResponse(**summary.to_dict())
+    except Exception as e:
+        logger.error("YOLO project annotation failed: %s", e)
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"YOLO annotation failed: {e}")
+    finally:
+        store.close()
+
+
+def _yolo_options_from_request(request: YoloAnnotateRequest) -> YoloAnnotateOptions:
+    model_path = request.model_path.strip()
+    if not model_path:
+        raise ValueError("YOLO model path is required")
+
+    return YoloAnnotateOptions(
+        model_path=model_path,
+        confidence=max(0.0, min(1.0, request.confidence)),
+        iou=max(0.0, min(1.0, request.iou)),
+        imgsz=request.imgsz,
+        max_detections=max(1, request.max_detections),
+        device=request.device,
+        class_filter=request.class_filter,
+        use_sam=request.use_sam,
+        use_yolo_masks=request.use_yolo_masks,
+        status=request.status,
+        duplicate_threshold=max(0.0, min(1.0, request.duplicate_threshold)),
+        replace_existing_yolo=request.replace_existing_yolo,
+    )
+
+
 # ==================== Embedding Endpoints ====================
 
 
@@ -468,6 +682,9 @@ async def propagate(request: PropagateRequest):
             source_image_id=str(request.source_image_id),
             target_image_id=str(request.target_image_id),
             annotation_id=request.source_annotation_id,
+            use_bbox_hint=request.use_bbox_hint,
+            bbox_hint_scale=max(0.5, min(3.0, request.bbox_hint_scale)),
+            prune_thin_artifacts=request.prune_thin_artifacts,
             top_k=request.top_k,
             size_min_ratio=request.size_min_ratio,
             size_max_ratio=request.size_max_ratio,
@@ -490,40 +707,16 @@ async def propagate(request: PropagateRequest):
         if request.skip_duplicate_threshold > 0:
             # Get existing annotations on target image
             target_annotations = store.list_annotations(request.target_image_id)
-            source_label_id = ann.label_id
-
-            for existing_ann in target_annotations:
-                if existing_ann.mask_rle:
-                    try:
-                        existing_mask = rle_to_mask(existing_ann.mask_rle)
-                        iou = mask_iou(new_mask, existing_mask)
-
-                        if iou >= request.skip_duplicate_threshold:
-                            duplicate_skipped = True
-                            duplicate_iou = iou
-
-                            # Check if it's the same label or different
-                            if existing_ann.label_id != source_label_id:
-                                # Different class at same location - get label name
-                                existing_label = store.get_label_by_id(
-                                    existing_ann.label_id
-                                )
-                                conflicting_label_name = (
-                                    existing_label.name
-                                    if existing_label
-                                    else f"label_{existing_ann.label_id}"
-                                )
-                                logger.info(
-                                    f"Skipping - location already labeled as '{conflicting_label_name}' (IoU={iou:.3f} with ann {existing_ann.id})"
-                                )
-                            else:
-                                logger.info(
-                                    f"Skipping duplicate annotation (IoU={iou:.3f} with ann {existing_ann.id})"
-                                )
-                            break
-                    except Exception as e:
-                        logger.warning(f"Failed to compare masks: {e}")
-                        continue
+            duplicate_skipped, duplicate_iou, conflicting_label_name = (
+                _find_duplicate_annotation(
+                    store=store,
+                    existing_annotations=target_annotations,
+                    new_bbox=new_bbox,
+                    new_mask=new_mask,
+                    source_label_id=ann.label_id,
+                    threshold=request.skip_duplicate_threshold,
+                )
+            )
 
         # Convert to RLE and polygon
         rle = mask_to_rle(new_mask)
@@ -578,6 +771,9 @@ class PropagateAdvancedRequest(BaseModel):
     iou_verify: bool = True
     iou_threshold: float = 0.3
     use_cached_masks: bool = True
+    use_bbox_hint: bool = True
+    bbox_hint_scale: float = 1.15
+    prune_thin_artifacts: bool = True
     size_min_ratio: float = 0.8
     size_max_ratio: float = 1.2
     stop_on_size_mismatch: bool = True
@@ -731,6 +927,9 @@ async def propagate_advanced(request: PropagateAdvancedRequest):
             iou_verify=request.iou_verify,
             iou_threshold=request.iou_threshold,
             use_cached_masks=request.use_cached_masks,
+            use_bbox_hint=request.use_bbox_hint,
+            bbox_hint_scale=max(0.5, min(3.0, request.bbox_hint_scale)),
+            prune_thin_artifacts=request.prune_thin_artifacts,
             size_min_ratio=request.size_min_ratio,
             size_max_ratio=request.size_max_ratio,
             stop_on_size_mismatch=request.stop_on_size_mismatch,
@@ -748,40 +947,16 @@ async def propagate_advanced(request: PropagateAdvancedRequest):
 
         if request.skip_duplicate_threshold > 0:
             target_annotations = store.list_annotations(request.target_image_id)
-            source_label_id = ann.label_id
-
-            for existing_ann in target_annotations:
-                if existing_ann.mask_rle:
-                    try:
-                        existing_mask = rle_to_mask(existing_ann.mask_rle)
-                        iou = mask_iou(result.mask, existing_mask)
-
-                        if iou >= request.skip_duplicate_threshold:
-                            duplicate_skipped = True
-                            duplicate_iou = iou
-
-                            # Check if it's the same label or different
-                            if existing_ann.label_id != source_label_id:
-                                # Different class at same location - get label name
-                                existing_label = store.get_label_by_id(
-                                    existing_ann.label_id
-                                )
-                                conflicting_label_name = (
-                                    existing_label.name
-                                    if existing_label
-                                    else f"label_{existing_ann.label_id}"
-                                )
-                                logger.info(
-                                    f"Skipping - location already labeled as '{conflicting_label_name}' (IoU={iou:.3f} with ann {existing_ann.id})"
-                                )
-                            else:
-                                logger.info(
-                                    f"Skipping duplicate annotation (IoU={iou:.3f} with ann {existing_ann.id})"
-                                )
-                            break
-                    except Exception as e:
-                        logger.warning(f"Failed to compare masks: {e}")
-                        continue
+            duplicate_skipped, duplicate_iou, conflicting_label_name = (
+                _find_duplicate_annotation(
+                    store=store,
+                    existing_annotations=target_annotations,
+                    new_bbox=result.bbox,
+                    new_mask=result.mask,
+                    source_label_id=ann.label_id,
+                    threshold=request.skip_duplicate_threshold,
+                )
+            )
 
         return PropagateAdvancedResponse(
             bbox=result.bbox,

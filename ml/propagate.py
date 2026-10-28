@@ -176,6 +176,42 @@ def _bbox_iou(bbox1: list[float], bbox2: list[float]) -> float:
     return intersection / union if union > 0 else 0.0
 
 
+def _translate_bbox_hint(
+    source_bbox: list[float],
+    center_x: float,
+    center_y: float,
+    img_w: int,
+    img_h: int,
+    scale: float = 1.15,
+) -> list[float]:
+    """Build a padded square hint around a new center point.
+
+    Using the larger source bbox side makes the hint much more tolerant to
+    object rotation than reusing the exact previous width/height.
+    """
+    side = max(
+        1.0,
+        max(source_bbox[2] - source_bbox[0], source_bbox[3] - source_bbox[1]) * scale,
+    )
+
+    x1 = center_x - side / 2
+    y1 = center_y - side / 2
+    x2 = center_x + side / 2
+    y2 = center_y + side / 2
+
+    x1 = max(0.0, x1)
+    y1 = max(0.0, y1)
+    x2 = min(float(img_w), x2)
+    y2 = min(float(img_h), y2)
+
+    if x2 <= x1:
+        x2 = min(float(img_w), x1 + 1.0)
+    if y2 <= y1:
+        y2 = min(float(img_h), y1 + 1.0)
+
+    return [x1, y1, x2, y2]
+
+
 def score_candidates(
     candidates: list[list[float]],
     prev_descriptor: np.ndarray,
@@ -333,6 +369,39 @@ class PropagateService:
         self.embed_service = None
         self.segment_service = None
 
+    def _rerun_segmentation_with_bbox(
+        self,
+        target_image: np.ndarray,
+        target_bbox: list[float],
+        target_image_id: Optional[str] = None,
+    ) -> tuple[np.ndarray, float, list[float]]:
+        """Mirror the manual 'S' flow by re-segmenting from the final bbox."""
+        self.segment_service.set_image(target_image, target_image_id)
+        return self.segment_service.segment_with_bbox(bbox_xyxy=target_bbox)
+
+    def _postprocess_tracked_mask(
+        self,
+        mask: np.ndarray,
+        bbox: list[float],
+        prune_thin_artifacts: bool,
+    ) -> tuple[np.ndarray, list[float]]:
+        """Apply conservative tracking-only mask cleanup and recompute bbox."""
+        if not prune_thin_artifacts:
+            return mask, bbox
+
+        from core.masks import (
+            mask_to_bbox,
+            prune_thin_artifacts as prune_mask_artifacts,
+        )
+
+        cleaned_mask = prune_mask_artifacts(mask)
+        cleaned_bbox = mask_to_bbox(cleaned_mask)
+
+        if cleaned_bbox == [0, 0, 0, 0]:
+            return mask, bbox
+
+        return cleaned_mask, cleaned_bbox
+
     def propagate_dense(
         self,
         source_mask: np.ndarray,
@@ -433,6 +502,9 @@ class PropagateService:
         iou_verify: bool = True,
         iou_threshold: float = 0.3,
         use_cached_masks: bool = False,
+        use_bbox_hint: bool = True,
+        bbox_hint_scale: float = 1.15,
+        prune_thin_artifacts: bool = True,
         **kwargs,
     ) -> Optional[PropagationResult]:
         """
@@ -465,7 +537,7 @@ class PropagateService:
         Returns:
             PropagationResult or None if propagation fails
         """
-        from core.masks import mask_iou
+        from core.masks import mask_iou, mask_to_bbox
 
         img_h, img_w = target_image.shape[:2]
 
@@ -518,6 +590,8 @@ class PropagateService:
                     source_image_id=source_image_id,
                     target_image_id=target_image_id,
                     annotation_id=annotation_id,
+                    use_bbox_hint=use_bbox_hint,
+                    bbox_hint_scale=bbox_hint_scale,
                     **kwargs,
                 )
                 if peak_result:
@@ -576,12 +650,44 @@ class PropagateService:
                 self.segment_service.set_image(target_image, target_image_id)
 
                 try:
+                    bbox_hint = None
+                    if use_bbox_hint:
+                        dense_bbox = mask_to_bbox(dense_mask)
+                        bbox_hint = _translate_bbox_hint(
+                            dense_bbox,
+                            center_x,
+                            center_y,
+                            img_w,
+                            img_h,
+                            scale=bbox_hint_scale,
+                        )
                     mask, sam_score, bbox = self.segment_service.segment_with_point(
-                        center_x, center_y
+                        center_x, center_y, bbox_hint=bbox_hint
+                    )
+                    mask, bbox = self._postprocess_tracked_mask(
+                        mask,
+                        bbox,
+                        prune_thin_artifacts,
                     )
 
                     # Verify IoU
                     iou_score = mask_iou(mask, dense_mask)
+                    if iou_score >= iou_threshold:
+                        try:
+                            mask, sam_score, bbox = self._rerun_segmentation_with_bbox(
+                                target_image,
+                                bbox,
+                                target_image_id,
+                            )
+                            mask, bbox = self._postprocess_tracked_mask(
+                                mask,
+                                bbox,
+                                prune_thin_artifacts,
+                            )
+                            iou_score = mask_iou(mask, dense_mask)
+                        except Exception as e:
+                            logger.warning(f"Dense bbox-pass refinement failed: {e}")
+
                     if iou_score >= iou_threshold:
                         area_ratio = (
                             mask.sum() / source_area if source_area > 0 else 1.0
@@ -639,6 +745,9 @@ class PropagateService:
         source_image_id: Optional[str] = None,
         target_image_id: Optional[str] = None,
         annotation_id: Optional[int] = None,
+        use_bbox_hint: bool = True,
+        bbox_hint_scale: float = 1.15,
+        prune_thin_artifacts: bool = True,
         top_k: int = 5,
         min_score: float = 0.5,
         search_expansion: float = 0.3,
@@ -771,11 +880,27 @@ class PropagateService:
             )
 
             try:
+                bbox_hint = None
+                if use_bbox_hint:
+                    bbox_hint = _translate_bbox_hint(
+                        source_bbox,
+                        point_x,
+                        point_y,
+                        img_w,
+                        img_h,
+                        scale=bbox_hint_scale,
+                    )
+
                 # Use point to prompt SAM
                 mask, sam_score, refined_bbox = self.segment_service.segment_with_point(
                     point_x,
                     point_y,
-                    bbox_hint=None,  # Let SAM figure out the object
+                    bbox_hint=bbox_hint,
+                )
+                mask, refined_bbox = self._postprocess_tracked_mask(
+                    mask,
+                    refined_bbox,
+                    prune_thin_artifacts,
                 )
 
                 # Verify with embedding - compute descriptor of result
@@ -846,6 +971,71 @@ class PropagateService:
         logger.info("======================================")
 
         # Select best result
+        def finalize_selected_result(
+            selected_result: tuple[list[float], np.ndarray, float, float, float],
+            fallback_used: bool,
+        ) -> tuple[list[float], np.ndarray, float, bool, float]:
+            (
+                selected_bbox,
+                selected_mask,
+                selected_confidence,
+                _,
+                selected_area_ratio,
+            ) = selected_result
+
+            try:
+                refined_mask, refined_sam_score, refined_bbox = (
+                    self._rerun_segmentation_with_bbox(
+                        target_image,
+                        selected_bbox,
+                        target_image_id,
+                    )
+                )
+                refined_mask, refined_bbox = self._postprocess_tracked_mask(
+                    refined_mask,
+                    refined_bbox,
+                    prune_thin_artifacts,
+                )
+                refined_descriptor = self.embed_service.get_object_descriptor(
+                    target_image,
+                    refined_bbox,
+                    mask=refined_mask,
+                    image_id=target_image_id,
+                )
+                refined_similarity = self.embed_service.compute_similarity(
+                    source_descriptor, refined_descriptor
+                )
+                refined_confidence = 0.6 * refined_similarity + 0.4 * refined_sam_score
+                refined_area = (refined_bbox[2] - refined_bbox[0]) * (
+                    refined_bbox[3] - refined_bbox[1]
+                )
+                refined_area_ratio = (
+                    refined_area / source_area if source_area > 0 else 1.0
+                )
+
+                logger.info(
+                    "Final bbox-pass refinement: "
+                    f"conf={refined_confidence:.3f}, area_ratio={refined_area_ratio:.2f}, "
+                    f"bbox={[int(x) for x in refined_bbox]}"
+                )
+
+                return (
+                    refined_bbox,
+                    refined_mask,
+                    refined_confidence,
+                    fallback_used,
+                    refined_area_ratio,
+                )
+            except Exception as e:
+                logger.warning(f"Final bbox-pass refinement failed: {e}")
+                return (
+                    selected_bbox,
+                    selected_mask,
+                    selected_confidence,
+                    fallback_used,
+                    selected_area_ratio,
+                )
+
         if size_acceptable_results:
             # Return best similarity among size-acceptable results
             best = max(
@@ -854,13 +1044,7 @@ class PropagateService:
             logger.info(
                 f"Propagation succeeded with size-acceptable result: sim={best[3]:.3f}, ratio={best[4]:.2f}"
             )
-            return (
-                best[0],
-                best[1],
-                best[2],
-                False,
-                best[4],
-            )  # fallback_used = False, area_ratio
+            return finalize_selected_result(best, False)
 
         if all_valid_results and not stop_on_size_mismatch:
             # Fallback: return best similarity overall (only if allowed)
@@ -868,13 +1052,7 @@ class PropagateService:
             logger.info(
                 f"Propagation using fallback (size mismatch): sim={best[3]:.3f}, ratio={best[4]:.2f}"
             )
-            return (
-                best[0],
-                best[1],
-                best[2],
-                True,
-                best[4],
-            )  # fallback_used = True, area_ratio
+            return finalize_selected_result(best, True)
 
         if all_valid_results and stop_on_size_mismatch:
             best = max(all_valid_results, key=lambda x: x[3])

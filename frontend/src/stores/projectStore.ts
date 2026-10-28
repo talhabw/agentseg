@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Project, ImageRecord } from '../types';
 import * as api from '../api/client';
 import { useUIStore } from './uiStore';
+import { useAnnotationStore } from './annotationStore';
 
 interface ProjectState {
   // State
@@ -16,7 +17,12 @@ interface ProjectState {
   imageCount: number;
 
   // Actions
-  createProject: (projectDir: string, imageDir: string, name: string) => Promise<void>;
+  createProject: (
+    projectDir: string,
+    imageDir: string,
+    name: string,
+    yoloPreprocess?: api.YoloPreprocessOptions
+  ) => Promise<Project>;
   openProject: (projectDir: string) => Promise<void>;
   closeProject: () => Promise<void>;
   loadImages: () => Promise<void>;
@@ -46,14 +52,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   // Actions
-  createProject: async (projectDir, imageDir, name) => {
+  createProject: async (projectDir, imageDir, name, yoloPreprocess) => {
     set({ isLoading: true, error: null });
     try {
-      const project = await api.createProject(projectDir, imageDir, name);
+      const project = await api.createProject(projectDir, imageDir, name, yoloPreprocess);
+      useAnnotationStore.getState().invalidateAnnotations();
       set({ project, currentImageIndex: 0 });
       await get().loadImages();
       // Save last project path
       useUIStore.getState().setLastProjectPath(projectDir);
+      return project;
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Failed to create project' });
       throw err;
@@ -66,6 +74,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const project = await api.openProject(projectDir);
+      useAnnotationStore.getState().invalidateAnnotations();
       
       // Try to restore last image index
       let lastIndex = 0;
@@ -101,6 +110,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     try {
       await api.closeProject();
     } finally {
+      useAnnotationStore.getState().invalidateAnnotations();
       set({ project: null, images: [], currentImageIndex: 0, error: null });
     }
   },
@@ -115,37 +125,25 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   setCurrentImageIndex: (index) => {
-    const { images, project } = get();
+    const { images } = get();
     if (index >= 0 && index < images.length) {
       set({ currentImageIndex: index });
-      // Save to backend (fire and forget)
-      if (project) {
-        api.setSetting('last_image_index', String(index)).catch(() => {});
-      }
     }
   },
 
   nextImage: () => {
-    const { currentImageIndex, images, project } = get();
+    const { currentImageIndex, images } = get();
     if (currentImageIndex < images.length - 1) {
       const newIndex = currentImageIndex + 1;
       set({ currentImageIndex: newIndex });
-      // Save to backend (fire and forget)
-      if (project) {
-        api.setSetting('last_image_index', String(newIndex)).catch(() => {});
-      }
     }
   },
 
   prevImage: () => {
-    const { currentImageIndex, project } = get();
+    const { currentImageIndex } = get();
     if (currentImageIndex > 0) {
       const newIndex = currentImageIndex - 1;
       set({ currentImageIndex: newIndex });
-      // Save to backend (fire and forget)
-      if (project) {
-        api.setSetting('last_image_index', String(newIndex)).catch(() => {});
-      }
     }
   },
 
@@ -170,6 +168,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     try {
       const result = await api.resyncImages();
+      useAnnotationStore.getState().invalidateAnnotations();
 
       // Reload images to get updated list
       await get().loadImages();

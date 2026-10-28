@@ -32,11 +32,25 @@ interface UIState {
   sizeMaxRatio: number; // Max allowed size ratio (e.g. 1.2)
   stopOnSizeMismatch: boolean;  // If true, stop propagation when size differs; if false, use fallback
   topK: number; // Number of peak candidates to try during propagation
+  useBBoxHint: boolean; // Whether tracking should constrain SAM with a bbox hint
+  bboxHintScale: number; // Scale factor applied to SAM bbox hints during tracking
+  pruneThinArtifacts: boolean; // Remove thin tracking branches before saving/showing masks
   propagationMode: PropagationMode; // 'peak', 'dense', or 'auto'
   iouVerify: boolean; // Whether to verify results against dense prediction
   iouThreshold: number; // Minimum IoU with dense prediction to accept
+  trackingDuplicateThreshold: number; // Same-label overlap threshold for duplicate suppression
   autoNext: boolean; // Auto-advance to next image after propagation
   propagationFailureMode: 'stop' | 'skip'; // 'stop' = stop on failure, 'skip' = skip failed image and continue
+
+  // YOLO assisted annotation settings
+  yoloModelPath: string;
+  yoloConfidence: number;
+  yoloIou: number;
+  yoloClassFilter: string;
+  yoloUseSam: boolean;
+  yoloUseYoloMasks: boolean;
+  yoloMaxDetections: number;
+  yoloDevice: string;
   
   // Performance mode settings
   performanceMode: boolean; // When true, skip UI updates during auto-propagation
@@ -56,6 +70,8 @@ interface UIState {
   propagationLoaded: boolean;
   isLoadingModel: boolean;
   isPropagating: boolean;  // Track if propagation is in progress
+  isRunningYolo: boolean;
+  autoYoloEnabled: boolean;
   performanceProgress: PerformanceProgress | null; // Progress tracking for batch propagation
   
   // Modal states
@@ -88,11 +104,23 @@ interface UIState {
   setSizeMaxRatio: (ratio: number) => void;
   setStopOnSizeMismatch: (stop: boolean) => void;
   setTopK: (k: number) => void;
+  setUseBBoxHint: (enabled: boolean) => void;
+  setBboxHintScale: (scale: number) => void;
+  setPruneThinArtifacts: (enabled: boolean) => void;
   setPropagationMode: (mode: PropagationMode) => void;
   setIouVerify: (verify: boolean) => void;
   setIouThreshold: (threshold: number) => void;
+  setTrackingDuplicateThreshold: (threshold: number) => void;
   setAutoNext: (enabled: boolean) => void;
   setPropagationFailureMode: (mode: 'stop' | 'skip') => void;
+  setYoloModelPath: (path: string) => void;
+  setYoloConfidence: (confidence: number) => void;
+  setYoloIou: (iou: number) => void;
+  setYoloClassFilter: (value: string) => void;
+  setYoloUseSam: (enabled: boolean) => void;
+  setYoloUseYoloMasks: (enabled: boolean) => void;
+  setYoloMaxDetections: (maxDetections: number) => void;
+  setYoloDevice: (device: string) => void;
   
   // SAM settings actions
   setSamMaskThreshold: (threshold: number) => Promise<void>;
@@ -104,6 +132,8 @@ interface UIState {
   // Status
   setStatusMessage: (message: string) => void;
   setIsPropagating: (value: boolean) => void;
+  setIsRunningYolo: (value: boolean) => void;
+  setAutoYoloEnabled: (enabled: boolean) => void;
   
   // Performance mode actions
   setPerformanceMode: (enabled: boolean) => void;
@@ -124,11 +154,25 @@ export const useUIStore = create<UIState>()(
       sizeMaxRatio: 2.0, // Max allowed size ratio (2.0x)
       stopOnSizeMismatch: true,  // Default: stop on size mismatch (safer)
       topK: 5, // Try 5 peak candidates by default
+      useBBoxHint: true, // Default: use bbox hints to keep tracking localized
+      bboxHintScale: 1.15, // Slightly padded hint to keep SAM localized during tracking
+      pruneThinArtifacts: true, // Default: clean thin tracking whiskers before returning results
       propagationMode: 'auto', // Default: auto mode tries peak then dense
       iouVerify: true, // Default: verify results
       iouThreshold: 0.3, // Default: 30% IoU threshold
+      trackingDuplicateThreshold: 0.75, // Default: skip same-label results that mostly overlap
       autoNext: false, // Default: manual navigation
       propagationFailureMode: 'stop', // Default: stop on failure (safer)
+
+      // YOLO assisted annotation settings
+      yoloModelPath: '',
+      yoloConfidence: 0.25,
+      yoloIou: 0.7,
+      yoloClassFilter: '',
+      yoloUseSam: true,
+      yoloUseYoloMasks: true,
+      yoloMaxDetections: 300,
+      yoloDevice: 'cuda',
       
       // Performance mode settings
       performanceMode: false, // Default: normal mode with UI updates
@@ -148,6 +192,8 @@ export const useUIStore = create<UIState>()(
       propagationLoaded: false,
       isLoadingModel: false,
       isPropagating: false,
+      isRunningYolo: false,
+      autoYoloEnabled: false,
       performanceProgress: null,
       showCreateProjectModal: false,
       showOpenProjectModal: false,
@@ -236,11 +282,23 @@ export const useUIStore = create<UIState>()(
       setSizeMaxRatio: (ratio) => set({ sizeMaxRatio: Math.max(0.1, Math.min(5.0, ratio)) }),
       setStopOnSizeMismatch: (stop) => set({ stopOnSizeMismatch: stop }),
       setTopK: (k) => set({ topK: Math.max(1, Math.min(10, k)) }),
+      setUseBBoxHint: (enabled) => set({ useBBoxHint: enabled }),
+      setBboxHintScale: (scale) => set({ bboxHintScale: Math.max(0.5, Math.min(3.0, scale)) }),
+      setPruneThinArtifacts: (enabled) => set({ pruneThinArtifacts: enabled }),
       setPropagationMode: (mode) => set({ propagationMode: mode }),
       setIouVerify: (verify) => set({ iouVerify: verify }),
       setIouThreshold: (threshold) => set({ iouThreshold: Math.max(0, Math.min(1, threshold)) }),
+      setTrackingDuplicateThreshold: (threshold) => set({ trackingDuplicateThreshold: Math.max(0, Math.min(1, threshold)) }),
       setAutoNext: (enabled) => set({ autoNext: enabled }),
       setPropagationFailureMode: (mode) => set({ propagationFailureMode: mode }),
+      setYoloModelPath: (path) => set({ yoloModelPath: path }),
+      setYoloConfidence: (confidence) => set({ yoloConfidence: Math.max(0, Math.min(1, confidence)) }),
+      setYoloIou: (iou) => set({ yoloIou: Math.max(0, Math.min(1, iou)) }),
+      setYoloClassFilter: (value) => set({ yoloClassFilter: value }),
+      setYoloUseSam: (enabled) => set({ yoloUseSam: enabled }),
+      setYoloUseYoloMasks: (enabled) => set({ yoloUseYoloMasks: enabled }),
+      setYoloMaxDetections: (maxDetections) => set({ yoloMaxDetections: Math.max(1, Math.min(1000, Math.round(maxDetections))) }),
+      setYoloDevice: (device) => set({ yoloDevice: device }),
 
       // SAM settings - sync with backend
       setSamMaskThreshold: async (threshold) => {
@@ -297,6 +355,8 @@ export const useUIStore = create<UIState>()(
 
       setStatusMessage: (message) => set({ statusMessage: message }),
       setIsPropagating: (value) => set({ isPropagating: value }),
+      setIsRunningYolo: (value) => set({ isRunningYolo: value }),
+      setAutoYoloEnabled: (enabled) => set({ autoYoloEnabled: enabled }),
       
       // Performance mode actions
       setPerformanceMode: (enabled) => set({ performanceMode: enabled }),
@@ -331,11 +391,23 @@ export const useUIStore = create<UIState>()(
         sizeMaxRatio: state.sizeMaxRatio,
         stopOnSizeMismatch: state.stopOnSizeMismatch,
         topK: state.topK,
+        useBBoxHint: state.useBBoxHint,
+        bboxHintScale: state.bboxHintScale,
+        pruneThinArtifacts: state.pruneThinArtifacts,
         propagationMode: state.propagationMode,
         iouVerify: state.iouVerify,
         iouThreshold: state.iouThreshold,
+        trackingDuplicateThreshold: state.trackingDuplicateThreshold,
         autoNext: state.autoNext,
         performanceMode: state.performanceMode,
+        yoloModelPath: state.yoloModelPath,
+        yoloConfidence: state.yoloConfidence,
+        yoloIou: state.yoloIou,
+        yoloClassFilter: state.yoloClassFilter,
+        yoloUseSam: state.yoloUseSam,
+        yoloUseYoloMasks: state.yoloUseYoloMasks,
+        yoloMaxDetections: state.yoloMaxDetections,
+        yoloDevice: state.yoloDevice,
       }),
     }
   )

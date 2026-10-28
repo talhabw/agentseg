@@ -3,6 +3,10 @@ import type { Annotation, Label, RefinePoint } from '../types';
 import * as api from '../api/client';
 import { useUIStore } from './uiStore';
 
+const MAX_ANNOTATION_CACHE_ENTRIES = 40;
+const annotationCache = new Map<number, Annotation[]>();
+const annotationInflight = new Map<number, Promise<Annotation[]>>();
+
 interface AnnotationState {
   // State
   annotations: Annotation[];
@@ -13,7 +17,9 @@ interface AnnotationState {
   isLoading: boolean;
 
   // Actions
-  loadAnnotations: (imageId: number) => Promise<void>;
+  loadAnnotations: (imageId: number, signal?: AbortSignal) => Promise<void>;
+  prefetchAnnotations: (imageIds: number[]) => void;
+  invalidateAnnotations: (imageId?: number) => void;
   loadLabels: () => Promise<void>;
   createAnnotation: (data: {
     image_id: number;
@@ -58,14 +64,47 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   isLoading: false,
 
   // Actions
-  loadAnnotations: async (imageId) => {
+  loadAnnotations: async (imageId, signal) => {
     set({ isLoading: true });
     try {
-      const annotations = await api.listAnnotations(imageId);
+      const cachedAnnotations = annotationCache.get(imageId);
+      if (cachedAnnotations) {
+        if (!signal?.aborted) {
+          set({ annotations: cachedAnnotations, selectedAnnotationId: null, refinePoints: [], isLoading: false });
+        }
+        return;
+      }
+
+      const annotations = await getAnnotationsForImage(imageId, signal);
+      if (signal?.aborted) return;
       set({ annotations, selectedAnnotationId: null, refinePoints: [] });
+    } catch (err) {
+      if (signal?.aborted) return;
+      throw err;
     } finally {
-      set({ isLoading: false });
+      if (!signal?.aborted) {
+        set({ isLoading: false });
+      }
     }
+  },
+
+  prefetchAnnotations: (imageIds) => {
+    for (const imageId of imageIds) {
+      if (annotationCache.has(imageId) || annotationInflight.has(imageId)) continue;
+      void getAnnotationsForImage(imageId).catch(() => {
+        // Prefetch failures should not affect the active workflow.
+      });
+    }
+  },
+
+  invalidateAnnotations: (imageId) => {
+    if (imageId === undefined) {
+      annotationCache.clear();
+      annotationInflight.clear();
+      return;
+    }
+    annotationCache.delete(imageId);
+    annotationInflight.delete(imageId);
   },
 
   loadLabels: async () => {
@@ -83,6 +122,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
 
   createAnnotation: async (data) => {
     const annotation = await api.createAnnotation(data);
+    addAnnotationToCache(annotation);
     set((state) => ({
       annotations: [...state.annotations, annotation],
       selectedAnnotationId: annotation.id,
@@ -92,6 +132,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
 
   updateAnnotation: async (annotationId, data) => {
     const updated = await api.updateAnnotation(annotationId, data);
+    updateAnnotationInCache(updated);
     set((state) => ({
       annotations: state.annotations.map((a) =>
         a.id === annotationId ? updated : a
@@ -100,7 +141,9 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   },
 
   deleteAnnotation: async (annotationId) => {
+    const existingImageId = get().annotations.find((a) => a.id === annotationId)?.image_id;
     await api.deleteAnnotation(annotationId);
+    removeAnnotationFromCache(annotationId, existingImageId);
     set((state) => ({
       annotations: state.annotations.filter((a) => a.id !== annotationId),
       selectedAnnotationId:
@@ -149,6 +192,66 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   },
 
   clearAnnotations: () => {
-    set({ annotations: [], selectedAnnotationId: null, refinePoints: [] });
+    set({ annotations: [], selectedAnnotationId: null, refinePoints: [], isLoading: false });
   },
 }));
+
+async function getAnnotationsForImage(imageId: number, signal?: AbortSignal): Promise<Annotation[]> {
+  const cachedAnnotations = annotationCache.get(imageId);
+  if (cachedAnnotations) return cachedAnnotations;
+
+  const existingRequest = annotationInflight.get(imageId);
+  if (existingRequest) return existingRequest;
+
+  const request = api.listAnnotations(imageId, signal)
+    .then((annotations) => {
+      annotationCache.set(imageId, annotations);
+      trimAnnotationCache();
+      return annotations;
+    })
+    .finally(() => {
+      annotationInflight.delete(imageId);
+    });
+
+  annotationInflight.set(imageId, request);
+  return request;
+}
+
+function addAnnotationToCache(annotation: Annotation) {
+  const cachedAnnotations = annotationCache.get(annotation.image_id);
+  if (!cachedAnnotations) return;
+  annotationCache.set(annotation.image_id, [...cachedAnnotations, annotation]);
+  trimAnnotationCache();
+}
+
+function updateAnnotationInCache(annotation: Annotation) {
+  const cachedAnnotations = annotationCache.get(annotation.image_id);
+  if (!cachedAnnotations) return;
+  annotationCache.set(
+    annotation.image_id,
+    cachedAnnotations.map((cached) => cached.id === annotation.id ? annotation : cached)
+  );
+}
+
+function removeAnnotationFromCache(annotationId: number, imageId?: number) {
+  if (imageId !== undefined && annotationCache.has(imageId)) {
+    const cachedAnnotations = annotationCache.get(imageId) ?? [];
+    annotationCache.set(imageId, cachedAnnotations.filter((annotation) => annotation.id !== annotationId));
+    return;
+  }
+
+  for (const [cachedImageId, cachedAnnotations] of annotationCache.entries()) {
+    if (cachedAnnotations.some((annotation) => annotation.id === annotationId)) {
+      annotationCache.set(cachedImageId, cachedAnnotations.filter((annotation) => annotation.id !== annotationId));
+      return;
+    }
+  }
+}
+
+function trimAnnotationCache() {
+  while (annotationCache.size > MAX_ANNOTATION_CACHE_ENTRIES) {
+    const firstKey = annotationCache.keys().next().value;
+    if (firstKey === undefined) break;
+    annotationCache.delete(firstKey);
+  }
+}

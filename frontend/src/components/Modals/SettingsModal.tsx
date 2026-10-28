@@ -1,11 +1,13 @@
 import { useUIStore, type EmbedModel } from '../../stores/uiStore';
 import { useProjectStore } from '../../stores/projectStore';
+import { useAnnotationStore } from '../../stores/annotationStore';
 import { useEffect, useState } from 'react';
 import * as api from '../../api/client';
 import type { PropagationMode } from '../../types';
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -22,7 +24,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
-import { RefreshCw, Trash2 } from 'lucide-react';
+import { ListOrdered, RefreshCw, Trash2 } from 'lucide-react';
 
 export function SettingsModal() {
   const {
@@ -40,12 +42,20 @@ export function SettingsModal() {
     setStopOnSizeMismatch,
     topK,
     setTopK,
+    useBBoxHint,
+    setUseBBoxHint,
+    bboxHintScale,
+    setBboxHintScale,
+    pruneThinArtifacts,
+    setPruneThinArtifacts,
     propagationMode,
     setPropagationMode,
     iouVerify,
     setIouVerify,
     iouThreshold,
     setIouThreshold,
+    trackingDuplicateThreshold,
+    setTrackingDuplicateThreshold,
     propagationFailureMode,
     setPropagationFailureMode,
     samMaskThreshold,
@@ -57,15 +67,33 @@ export function SettingsModal() {
     samLoaded,
     performanceMode,
     setPerformanceMode,
+    yoloModelPath,
+    setYoloModelPath,
+    yoloConfidence,
+    setYoloConfidence,
+    yoloIou,
+    setYoloIou,
+    yoloClassFilter,
+    setYoloClassFilter,
+    yoloUseSam,
+    setYoloUseSam,
+    yoloUseYoloMasks,
+    setYoloUseYoloMasks,
+    yoloMaxDetections,
+    setYoloMaxDetections,
+    yoloDevice,
+    setYoloDevice,
     addToast,
   } = useUIStore();
 
   const { resyncImages, project, images } = useProjectStore();
+  const { labels, loadLabels } = useAnnotationStore();
 
   const [availableModels, setAvailableModels] = useState<{ id: string; name: string; available: boolean }[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [bulkDeleteAfter, setBulkDeleteAfter] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showLabelMap, setShowLabelMap] = useState(false);
 
   useEffect(() => {
     if (showSettingsModal) {
@@ -74,6 +102,12 @@ export function SettingsModal() {
       }).catch(console.error);
     }
   }, [showSettingsModal]);
+
+  useEffect(() => {
+    if (showSettingsModal && project) {
+      void loadLabels();
+    }
+  }, [showSettingsModal, project, loadLabels]);
 
   const handleRefreshImages = async () => {
     setIsRefreshing(true);
@@ -128,6 +162,7 @@ export function SettingsModal() {
   // if (!showSettingsModal) return null; // Logic handled by Dialog open prop
 
   return (
+    <>
     <Dialog open={showSettingsModal} onOpenChange={setShowSettingsModal}>
       <DialogContent className="sm:max-w-[550px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
@@ -160,6 +195,24 @@ export function SettingsModal() {
                   >
                     <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
                     {isRefreshing ? 'Scanning...' : 'Refresh'}
+                  </Button>
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-border/50">
+                  <div className="space-y-1">
+                    <Label>Export Label IDs</Label>
+                    <p className="text-xs text-muted-foreground">
+                      View the class IDs that YOLO/COCO exports will write for this project.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowLabelMap(true)}
+                    disabled={labels.length === 0}
+                  >
+                    <ListOrdered className="h-4 w-4 mr-2" />
+                    View IDs
                   </Button>
                 </div>
 
@@ -263,6 +316,120 @@ export function SettingsModal() {
                 <p className="text-xs text-muted-foreground">
                   Larger models provide better segmentation accuracy but require more GPU memory and inference time.
                 </p>
+              </div>
+
+              <div className="space-y-4 pt-4 border-t border-border/50">
+                <div className="space-y-2">
+                  <Label>YOLO Model Path</Label>
+                  <Input
+                    placeholder="/path/to/yolo11.pt"
+                    value={yoloModelPath}
+                    onChange={(e) => setYoloModelPath(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Used for create-time preprocessing and the YOLO button on the current image. Supports bbox and segmentation YOLO models.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <Label>YOLO Confidence</Label>
+                      <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded text-muted-foreground">
+                        {(yoloConfidence * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                    <Slider
+                      min={1}
+                      max={100}
+                      step={1}
+                      value={[yoloConfidence * 100]}
+                      onValueChange={(vals) => setYoloConfidence(vals[0] / 100)}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <Label>YOLO IoU</Label>
+                      <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded text-muted-foreground">
+                        {(yoloIou * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                    <Slider
+                      min={1}
+                      max={100}
+                      step={1}
+                      value={[yoloIou * 100]}
+                      onValueChange={(vals) => setYoloIou(vals[0] / 100)}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>YOLO Classes</Label>
+                    <Input
+                      placeholder="optional: hole,0,torpedo"
+                      value={yoloClassFilter}
+                      onChange={(e) => setYoloClassFilter(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Comma-separated class names or ids. Leave empty to use all detected classes.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Max Detections</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={1000}
+                      value={yoloMaxDetections}
+                      onChange={(e) => setYoloMaxDetections(Number(e.target.value) || 1)}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>YOLO Device</Label>
+                  <Select value={yoloDevice} onValueChange={setYoloDevice}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select device" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cuda">CUDA</SelectItem>
+                      <SelectItem value="cpu">CPU</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex items-center space-x-4 rounded-lg border p-4">
+                  <Switch
+                    id="yolo-use-sam"
+                    checked={yoloUseSam}
+                    onCheckedChange={setYoloUseSam}
+                  />
+                  <div className="flex-1 space-y-1">
+                    <Label htmlFor="yolo-use-sam">Refine YOLO Boxes With SAM</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Recommended for bbox models. YOLO creates boxes, then SAM3 turns them into masks.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-4 rounded-lg border p-4">
+                  <Switch
+                    id="yolo-use-masks"
+                    checked={yoloUseYoloMasks}
+                    onCheckedChange={setYoloUseYoloMasks}
+                  />
+                  <div className="flex-1 space-y-1">
+                    <Label htmlFor="yolo-use-masks">Use YOLO Seg Masks When Available</Label>
+                    <p className="text-xs text-muted-foreground">
+                      For YOLO segmentation models, masks are used when SAM is off or if SAM refinement fails.
+                    </p>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -405,6 +572,25 @@ export function SettingsModal() {
               )}
 
               <div className="space-y-2">
+                <div className="flex justify-between items-center">
+                  <Label>Duplicate Threshold</Label>
+                  <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded text-muted-foreground">
+                    {(trackingDuplicateThreshold * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <Slider
+                  min={30}
+                  max={100}
+                  step={5}
+                  value={[trackingDuplicateThreshold * 100]}
+                  onValueChange={(vals) => setTrackingDuplicateThreshold(vals[0] / 100)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Skip a tracked result when it overlaps an existing same-label annotation by this much. Lower values remove more duplicates; higher values are more permissive.
+                </p>
+              </div>
+
+              <div className="space-y-2">
                 <Label>On Propagation Failure</Label>
                 <Select
                   value={propagationFailureMode}
@@ -440,6 +626,54 @@ export function SettingsModal() {
                 <p className="text-xs text-muted-foreground">
                   Number of peak locations to try when matching. Higher = more thorough but slower.
                 </p>
+              </div>
+
+              <div className="flex items-center space-x-4 rounded-lg border p-4">
+                <Switch
+                  id="use-bbox-hint"
+                  checked={useBBoxHint}
+                  onCheckedChange={setUseBBoxHint}
+                />
+                <div className="flex-1 space-y-1">
+                  <Label htmlFor="use-bbox-hint">Use BBox Hints For Tracking</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Constrains tracked SAM prompts with a translated bbox hint. Turn this off to use free point-only prompting instead.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex justify-between items-center">
+                  <Label>BBox Hint Scale</Label>
+                  <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded text-muted-foreground">
+                    {useBBoxHint ? `${bboxHintScale.toFixed(2)}x` : 'Off'}
+                  </span>
+                </div>
+                <Slider
+                  min={50}
+                  max={300}
+                  step={5}
+                  value={[bboxHintScale * 100]}
+                  disabled={!useBBoxHint}
+                  onValueChange={(vals) => setBboxHintScale(vals[0] / 100)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Controls how much the SAM tracking hint box is padded when bbox hints are enabled. Lower = tighter and more restrictive. Higher = looser and more rotation-tolerant.
+                </p>
+              </div>
+
+              <div className="flex items-center space-x-4 rounded-lg border p-4">
+                <Switch
+                  id="prune-thin-artifacts"
+                  checked={pruneThinArtifacts}
+                  onCheckedChange={setPruneThinArtifacts}
+                />
+                <div className="flex-1 space-y-1">
+                  <Label htmlFor="prune-thin-artifacts">Prune Thin Tracking Artifacts</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Removes small thin branches that SAM sometimes adds to tracked masks before the result is shown and saved.
+                  </p>
+                </div>
               </div>
 
               <div className="space-y-2">
@@ -531,5 +765,52 @@ export function SettingsModal() {
         </div>
       </DialogContent>
     </Dialog>
+    <Dialog open={showLabelMap} onOpenChange={setShowLabelMap}>
+      <DialogContent className="sm:max-w-[560px]">
+        <DialogHeader>
+          <DialogTitle>Export Label IDs</DialogTitle>
+          <DialogDescription>
+            Export IDs are assigned from the project label list sorted by name, matching the current export code.
+          </DialogDescription>
+        </DialogHeader>
+
+        {labels.length > 0 ? (
+          <div className="max-h-[60vh] overflow-y-auto rounded-md border">
+            <div className="grid grid-cols-[80px_80px_90px_1fr] gap-3 border-b bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground">
+              <span>YOLO ID</span>
+              <span>COCO ID</span>
+              <span>Label ID</span>
+              <span>Name</span>
+            </div>
+            {labels.map((label, index) => (
+              <div
+                key={label.id}
+                className="grid grid-cols-[80px_80px_90px_1fr] items-center gap-3 border-b px-3 py-2 text-sm last:border-b-0"
+              >
+                <span className="font-mono text-muted-foreground">{index}</span>
+                <span className="font-mono text-muted-foreground">{index + 1}</span>
+                <span className="font-mono text-muted-foreground">{label.id}</span>
+                <span className="flex min-w-0 items-center gap-2">
+                  <span
+                    className="h-3 w-3 shrink-0 rounded-full border"
+                    style={{ backgroundColor: label.color }}
+                  />
+                  <span className="truncate">{label.name}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="rounded-md border p-4 text-sm text-muted-foreground">
+            No labels have been created for this project yet.
+          </p>
+        )}
+
+        <p className="text-xs text-muted-foreground">
+          YOLO segmentation/detection label files use the zero-based YOLO ID. COCO export category IDs use the one-based COCO ID.
+        </p>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }

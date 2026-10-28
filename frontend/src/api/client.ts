@@ -20,11 +20,74 @@ const api = axios.create({
 
 // ==================== Projects ====================
 
-export async function createProject(projectDir: string, imageDir: string, name: string): Promise<Project> {
+export interface YoloAnnotateOptions {
+  modelPath: string;
+  confidence: number;
+  iou: number;
+  imgsz?: number | null;
+  maxDetections: number;
+  device: string;
+  classFilter?: string[] | null;
+  useSam: boolean;
+  useYoloMasks: boolean;
+  status?: string;
+  duplicateThreshold?: number;
+  replaceExistingYolo?: boolean;
+}
+
+export interface YoloPreprocessOptions extends YoloAnnotateOptions {
+  enabled: boolean;
+}
+
+export interface YoloRunSummary {
+  images_processed: number;
+  detections: number;
+  created: number;
+  skipped_duplicates: number;
+  failed: number;
+  sam_failures: number;
+  labels_created: number;
+  per_image: Array<{
+    image_id: number;
+    order_index: number;
+    detections: number;
+    created: number;
+    skipped_duplicates: number;
+    failed: number;
+    sam_failures: number;
+  }>;
+}
+
+function yoloPayload(options: YoloAnnotateOptions) {
+  return {
+    model_path: options.modelPath,
+    confidence: options.confidence,
+    iou: options.iou,
+    imgsz: options.imgsz || undefined,
+    max_detections: options.maxDetections,
+    device: options.device,
+    class_filter: options.classFilter && options.classFilter.length > 0 ? options.classFilter : undefined,
+    use_sam: options.useSam,
+    use_yolo_masks: options.useYoloMasks,
+    status: options.status ?? 'pending',
+    duplicate_threshold: options.duplicateThreshold ?? 0.85,
+    replace_existing_yolo: options.replaceExistingYolo ?? false,
+  };
+}
+
+export async function createProject(
+  projectDir: string,
+  imageDir: string,
+  name: string,
+  yoloPreprocess?: YoloPreprocessOptions
+): Promise<Project> {
   const response = await api.post<Project>('/projects', {
     project_dir: projectDir,
     image_dir: imageDir,
     name,
+    yolo_preprocess: yoloPreprocess?.enabled
+      ? { enabled: true, ...yoloPayload(yoloPreprocess) }
+      : undefined,
   });
   return response.data;
 }
@@ -136,9 +199,10 @@ export async function updateLabel(
 
 // ==================== Annotations ====================
 
-export async function listAnnotations(imageId: number): Promise<Annotation[]> {
+export async function listAnnotations(imageId: number, signal?: AbortSignal): Promise<Annotation[]> {
   const response = await api.get<Annotation[]>('/annotations', {
     params: { image_id: imageId },
+    signal,
   });
   return response.data;
 }
@@ -229,6 +293,22 @@ export async function findImagesMissingAnnotations(
 
 // ==================== ML ====================
 
+export async function runYoloOnImage(
+  imageId: number,
+  options: YoloAnnotateOptions
+): Promise<YoloRunSummary> {
+  const response = await api.post<YoloRunSummary>('/ml/yolo/image', {
+    image_id: imageId,
+    ...yoloPayload(options),
+  });
+  return response.data;
+}
+
+export async function runYoloOnProject(options: YoloAnnotateOptions): Promise<YoloRunSummary> {
+  const response = await api.post<YoloRunSummary>('/ml/yolo/project', yoloPayload(options));
+  return response.data;
+}
+
 export async function loadSAM(device = 'cuda'): Promise<void> {
   await api.post('/ml/sam/load', { device });
 }
@@ -307,12 +387,18 @@ export async function propagate(
   sizeMaxRatio: number = 1.2,
   stopOnSizeMismatch: boolean = true,
   skipDuplicateThreshold: number = 0.9,
-  topK: number = 5
+  topK: number = 5,
+  useBBoxHint: boolean = true,
+  bboxHintScale: number = 1.15,
+  pruneThinArtifacts: boolean = true
 ): Promise<PropagateResult> {
   const response = await api.post<PropagateResult>('/ml/propagate', {
     source_image_id: sourceImageId,
     target_image_id: targetImageId,
     source_annotation_id: sourceAnnotationId,
+    use_bbox_hint: useBBoxHint,
+    bbox_hint_scale: bboxHintScale,
+    prune_thin_artifacts: pruneThinArtifacts,
     size_min_ratio: sizeMinRatio,
     size_max_ratio: sizeMaxRatio,
     stop_on_size_mismatch: stopOnSizeMismatch,
@@ -368,6 +454,9 @@ export async function propagateAdvanced(
     iouVerify?: boolean;
     iouThreshold?: number;
     useCachedMasks?: boolean;
+    useBBoxHint?: boolean;
+    bboxHintScale?: number;
+    pruneThinArtifacts?: boolean;
     sizeMinRatio?: number;
     sizeMaxRatio?: number;
     stopOnSizeMismatch?: boolean;
@@ -383,6 +472,9 @@ export async function propagateAdvanced(
     iou_verify: options.iouVerify ?? true,
     iou_threshold: options.iouThreshold ?? 0.3,
     use_cached_masks: options.useCachedMasks ?? true,
+    use_bbox_hint: options.useBBoxHint ?? true,
+    bbox_hint_scale: options.bboxHintScale ?? 1.15,
+    prune_thin_artifacts: options.pruneThinArtifacts ?? true,
     size_min_ratio: options.sizeMinRatio ?? 0.8,
     size_max_ratio: options.sizeMaxRatio ?? 1.2,
     stop_on_size_mismatch: options.stopOnSizeMismatch ?? true,
@@ -424,6 +516,7 @@ export async function exportYolo(data: {
   include_negative?: boolean;
   labels_only?: boolean;
   labels_colocate?: boolean;
+  image_intervals?: string;
 }): Promise<{
   train_images: number;
   val_images: number;
@@ -446,6 +539,7 @@ export async function exportBbox(data: {
   include_negative?: boolean;
   labels_only?: boolean;
   labels_colocate?: boolean;
+  image_intervals?: string;
 }): Promise<{
   format: string;
   train_images: number;
@@ -484,4 +578,3 @@ export async function getHomeDirectory(): Promise<{ path: string }> {
 }
 
 export default api;
-

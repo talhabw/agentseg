@@ -6,7 +6,10 @@ import { useAnnotationStore } from '../../stores/annotationStore';
 import { useUIStore } from '../../stores/uiStore';
 import { getOptimizedImageUrl } from '../../api/client';
 import { maskToCanvas, type RLEMask } from '../../utils/rle';
+import { getCachedImage, preloadImage } from '../../utils/imageCache';
 import type { Annotation, DrawingBbox } from '../../types';
+
+const IMAGE_LOAD_DEBOUNCE_MS = 120;
 
 export function ImageCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -105,37 +108,40 @@ export function ImageCanvas() {
       return;
     }
 
-    // Set loading state - this will hide stale annotations
-    setIsImageLoading(true);
     let cancelled = false;
+    const imageSrc = getOptimizedImageUrl(currentImage.id, 2048, 85, project?.id);
+    const cachedImage = getCachedImage(imageSrc);
+    if (cachedImage) {
+      setImage(cachedImage);
+      fitToView(cachedImage);
+      setIsImageLoading(false);
+      return;
+    }
 
-    const img = new window.Image();
-    img.crossOrigin = 'anonymous';
-    // Use optimized image endpoint for faster loading
-    img.src = getOptimizedImageUrl(currentImage.id, 2048, 85, project?.id);
+    const timeoutId = window.setTimeout(() => {
+      if (cancelled) return;
 
-    img.onload = () => {
-      if (!cancelled) {
-        setImage(img);
-        fitToView(img);
-        setIsImageLoading(false);
-      }
-    };
+      // Set loading state only when we are actually about to fetch the image.
+      setIsImageLoading(true);
 
-    img.onerror = () => {
-      console.error('Failed to load image:', currentImage.id);
-      if (!cancelled) {
-        setImage(null);
-        setIsImageLoading(false);
-      }
-    };
+      preloadImage(imageSrc).then((loadedImage) => {
+        if (!cancelled) {
+          setImage(loadedImage);
+          fitToView(loadedImage);
+          setIsImageLoading(false);
+        }
+      }).catch(() => {
+        console.error('Failed to load image:', currentImage.id);
+        if (!cancelled) {
+          setImage(null);
+          setIsImageLoading(false);
+        }
+      });
+    }, IMAGE_LOAD_DEBOUNCE_MS);
 
-    // Cleanup: abort image loading on unmount/change
     return () => {
       cancelled = true;
-      img.onload = null;
-      img.onerror = null;
-      img.src = ''; // Abort loading
+      window.clearTimeout(timeoutId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- depend on currentImage?.id not the full object to avoid unnecessary reloads
   }, [currentImage?.id, project?.id, isPerformanceLoopActive, fitToView]);

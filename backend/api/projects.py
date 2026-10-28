@@ -68,6 +68,7 @@ async def create_project(request: CreateProjectRequest):
         )
         _current_store = ProjectStore(project.db_path)
         _current_project = project
+
         return ProjectResponse.from_project(project, _current_store)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

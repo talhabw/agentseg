@@ -1,7 +1,7 @@
-
 import { useUIStore } from '../../stores/uiStore';
 import { useProjectStore } from '../../stores/projectStore';
 import { stopAutoTracking } from '../../App';
+import { runYoloOnCurrentImage, startAutoYolo, stopAutoYolo } from '../../utils/yoloRunner';
 
 
 import type { InteractionMode } from '../../types';
@@ -20,6 +20,7 @@ import {
   FolderOpen,
   Download,
   FastForward,
+  Search,
 } from 'lucide-react';
 
 export function Header() {
@@ -34,6 +35,8 @@ export function Header() {
     propagationLoaded,
     isLoadingModel,
     isPropagating,
+    isRunningYolo,
+    autoYoloEnabled,
     loadSAM,
     loadPropagation,
     setShowCreateProjectModal,
@@ -45,7 +48,8 @@ export function Header() {
     setAutoNext,
   } = useUIStore();
 
-  const { project } = useProjectStore();
+  const { project, images, currentImageIndex } = useProjectStore();
+  const currentImage = images[currentImageIndex];
 
   // Trigger segmentation via keyboard event simulation
   const triggerSegmentation = () => {
@@ -128,6 +132,52 @@ export function Header() {
           <span className="hidden sm:inline">Segment</span>
           <span className="text-[10px] font-mono opacity-60 hidden sm:inline">(S)</span>
         </Button>
+
+        {project && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-2 text-muted-foreground"
+            onClick={() => runYoloOnCurrentImage()}
+            disabled={isRunningYolo || !currentImage || autoYoloEnabled}
+            title="Run YOLO detection on current image (Y)"
+          >
+            {isRunningYolo ? (
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+            ) : (
+              <Search className="h-4 w-4" />
+            )}
+            <span className="hidden sm:inline">YOLO</span>
+            <span className="text-[10px] font-mono opacity-60 hidden sm:inline">(Y)</span>
+          </Button>
+        )}
+
+        {project && (
+          <Button
+            variant={autoYoloEnabled ? "secondary" : "ghost"}
+            size="sm"
+            className={`h-8 gap-2 transition-all ${autoYoloEnabled
+              ? 'bg-purple-500/20 text-purple-500 border-purple-500/50 hover:bg-purple-500/30 animate-pulse'
+              : 'text-muted-foreground'}`}
+            onClick={() => {
+              if (autoYoloEnabled) {
+                stopAutoYolo();
+              } else {
+                startAutoYolo();
+              }
+            }}
+            disabled={!currentImage || (isRunningYolo && !autoYoloEnabled)}
+            title={autoYoloEnabled ? "Stop Auto YOLO (Esc)" : "Run YOLO across images (Shift+Y)"}
+          >
+            {autoYoloEnabled ? (
+              <Square className="h-4 w-4" />
+            ) : (
+              <FastForward className="h-4 w-4" />
+            )}
+            <span className="hidden sm:inline">{autoYoloEnabled ? 'Stop' : 'Auto YOLO'}</span>
+            <span className="text-[10px] font-mono opacity-60 hidden sm:inline">(⇧Y)</span>
+          </Button>
+        )}
 
         {/* Action: Track */}
         <Button
