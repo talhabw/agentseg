@@ -213,6 +213,7 @@ async function runPerformancePropagation() {
       mask_rle: object;
       polygon: number[];
       track_id: number | null;
+      status?: string; // "ok" | "needs_review" (issue #5)
     }> = [];
     const failedLabels = new Map<string, FailedSource>();
     let duplicateSkipCount = 0;
@@ -268,6 +269,7 @@ async function runPerformancePropagation() {
           mask_rle: result.mask_rle,
           polygon: result.polygon,
           track_id: ann.track_id ?? null,
+          status: result.status,
         });
       } catch (err) {
         console.error(`[PERF] Failed to propagate annotation ${ann.id}:`, err);
@@ -329,6 +331,7 @@ async function runPerformancePropagation() {
               mask_rle: result.mask_rle,
               polygon: result.polygon,
               track_id: trackId,
+              status: result.status,
             });
             fallbackSuccess = true;
           } catch (err) {
@@ -355,7 +358,7 @@ async function runPerformancePropagation() {
           polygon: result.polygon,
           source: 'tracked',
           track_id: result.track_id,
-          status: 'pending',
+          status: result.status === 'needs_review' ? 'needs_review' : 'pending',
         });
       } catch (err) {
         console.error(`[PERF] Failed to create annotation:`, err);
@@ -766,6 +769,7 @@ function AppContent() {
         mask_rle: object;
         polygon: number[];
         track_id: number | null;
+        status?: string; // "ok" | "needs_review" (issue #5)
       }> = [];
       let duplicateSkipCount = 0;
       const notFoundLabels: { labelId: number; labelName: string }[] = [];  // Labels where object wasn't found in target
@@ -868,6 +872,7 @@ function AppContent() {
             mask_rle: result.mask_rle,
             polygon: result.polygon,
             track_id: ann.track_id ?? null,
+            status: result.status,
           });
         } catch (err: unknown) {
           console.error(`${logPrefix} Propagation failed for annotation:`, ann.id, err);
@@ -970,6 +975,7 @@ function AppContent() {
                 mask_rle: result.mask_rle,
                 polygon: result.polygon,
                 track_id: trackId,
+                status: result.status,
               });
               fallbackCount++;
               fallbackSuccess = true;
@@ -1026,7 +1032,7 @@ function AppContent() {
                   polygon: result.polygon,
                   source: 'tracked',
                   track_id: result.track_id,
-                  status: 'pending',
+                  status: result.status === 'needs_review' ? 'needs_review' : 'pending',
                 });
               } catch (err) {
                 console.error(`${logPrefix} Failed to create annotation:`, err);
@@ -1085,7 +1091,7 @@ function AppContent() {
             polygon: result.polygon,
             source: 'tracked',
             track_id: result.track_id,
-            status: 'pending',
+            status: result.status === 'needs_review' ? 'needs_review' : 'pending',
           });
         } catch (err) {
           console.error(`${logPrefix} Failed to create tracked annotation:`, err);

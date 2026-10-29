@@ -12,7 +12,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from typing import Optional, Literal, TYPE_CHECKING
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 import logging
 
 if TYPE_CHECKING:
@@ -31,6 +31,204 @@ class BboxCandidate:
     source: str = "propagated"
 
 
+# ==================== Tracking uncertainty ====================
+#
+# A propagation step produces one of three outcomes:
+#   - "ok":           best candidate looks consistent with the source object
+#   - "needs_review": a plausible candidate exists but some signal is off
+#                     (size change, centre jump, low similarity, ...). The
+#                     result is still returned so tracking can continue.
+#   - lost:           no plausible candidate at all -> PropagationNotFoundError
+#
+# TrackingSignals / PropagationResult.uncertainty() are plain, JSON-friendly
+# structures so a backend tracking job can emit them directly as events.
+
+STATUS_OK = "ok"
+STATUS_NEEDS_REVIEW = "needs_review"
+
+# Default thresholds shared by backend API and frontend (keep in sync with
+# frontend/src/stores/uiStore.ts).
+DEFAULT_SIZE_MIN_RATIO = 0.5
+DEFAULT_SIZE_MAX_RATIO = 2.0
+DEFAULT_MIN_SIMILARITY = 0.5
+
+
+@dataclass
+class TrackingThresholds:
+    """Thresholds for classifying a propagation result.
+
+    Size ratios are relative to the previous frame and are multiplied by the
+    caller's ``expected_area_ratio`` (adaptive area trend).
+    """
+
+    size_min_ratio: float = DEFAULT_SIZE_MIN_RATIO
+    size_max_ratio: float = DEFAULT_SIZE_MAX_RATIO
+    # Against the trusted anchor (nearest approved annotation); wider band
+    # because the object may legitimately drift in size over many frames.
+    anchor_min_ratio: float = 0.25
+    anchor_max_ratio: float = 4.0
+    # Below this on every candidate -> lost.
+    lost_similarity: float = DEFAULT_MIN_SIMILARITY
+    # Candidate mask smaller than this fraction of the source -> not plausible
+    # (object essentially left the frame / vanished).
+    lost_min_area_ratio: float = 0.05
+    # Plausible but below these -> needs_review.
+    uncertain_similarity: float = 0.6
+    min_sam_score: float = 0.5
+    # Centre displacement in units of the source bbox diagonal.
+    max_center_jump: float = 1.0
+    # Minimum IoU against dense prediction (advanced mode).
+    min_dense_iou: float = 0.3
+
+
+@dataclass
+class TrackingSignals:
+    """Raw per-step tracking signals (all ratios are target / reference)."""
+
+    embed_similarity: float
+    sam_score: float
+    bbox_area_ratio: float  # vs previous-frame bbox
+    mask_area_ratio: Optional[float]  # vs previous-frame mask (None if no source mask)
+    anchor_area_ratio: Optional[float] = None  # vs nearest approved anchor mask
+    center_jump: float = 0.0  # centre shift / source bbox diagonal
+    expected_area_ratio: float = 1.0  # adaptive trend used for the size check
+    touches_border: bool = False
+    dense_iou: Optional[float] = None
+
+    @property
+    def size_ratio(self) -> float:
+        """Ratio used for the size check: mask area if available, else bbox."""
+        return (
+            self.mask_area_ratio
+            if self.mask_area_ratio is not None
+            else self.bbox_area_ratio
+        )
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        for k, v in d.items():
+            if isinstance(v, (float, np.floating)):
+                d[k] = round(float(v), 4)
+            elif isinstance(v, np.bool_):
+                d[k] = bool(v)
+        return d
+
+
+def _bbox_area(bbox: list[float]) -> float:
+    return max(0.0, bbox[2] - bbox[0]) * max(0.0, bbox[3] - bbox[1])
+
+
+def compute_signals(
+    source_bbox: list[float],
+    source_mask_area: Optional[float],
+    target_bbox: list[float],
+    target_mask: Optional[np.ndarray],
+    embed_similarity: float,
+    sam_score: float,
+    img_w: int,
+    img_h: int,
+    anchor_mask_area: Optional[float] = None,
+    expected_area_ratio: float = 1.0,
+    dense_iou: Optional[float] = None,
+) -> TrackingSignals:
+    """Compute raw tracking signals for one candidate."""
+    src_area = _bbox_area(source_bbox)
+    bbox_ratio = _bbox_area(target_bbox) / src_area if src_area > 0 else 1.0
+
+    tgt_mask_area = (
+        float(np.count_nonzero(target_mask)) if target_mask is not None else None
+    )
+    mask_ratio = None
+    if source_mask_area and tgt_mask_area is not None:
+        mask_ratio = tgt_mask_area / source_mask_area
+    anchor_ratio = None
+    if anchor_mask_area and tgt_mask_area is not None:
+        anchor_ratio = tgt_mask_area / anchor_mask_area
+
+    scx = (source_bbox[0] + source_bbox[2]) / 2
+    scy = (source_bbox[1] + source_bbox[3]) / 2
+    tcx = (target_bbox[0] + target_bbox[2]) / 2
+    tcy = (target_bbox[1] + target_bbox[3]) / 2
+    diag = float(
+        np.hypot(source_bbox[2] - source_bbox[0], source_bbox[3] - source_bbox[1])
+    )
+    jump = float(np.hypot(tcx - scx, tcy - scy)) / diag if diag > 0 else 0.0
+
+    margin = 1.0
+    touches = (
+        target_bbox[0] <= margin
+        or target_bbox[1] <= margin
+        or target_bbox[2] >= img_w - margin
+        or target_bbox[3] >= img_h - margin
+    )
+
+    return TrackingSignals(
+        embed_similarity=float(embed_similarity),
+        sam_score=float(sam_score),
+        bbox_area_ratio=float(bbox_ratio),
+        mask_area_ratio=None if mask_ratio is None else float(mask_ratio),
+        anchor_area_ratio=None if anchor_ratio is None else float(anchor_ratio),
+        center_jump=jump,
+        expected_area_ratio=float(expected_area_ratio),
+        touches_border=bool(touches),
+        dense_iou=None if dense_iou is None else float(dense_iou),
+    )
+
+
+def is_plausible(signals: TrackingSignals, thresholds: TrackingThresholds) -> bool:
+    """Could this candidate be the tracked object at all? (else: lost)"""
+    if signals.embed_similarity < thresholds.lost_similarity:
+        return False
+    if signals.size_ratio < thresholds.lost_min_area_ratio:
+        return False
+    return True
+
+
+def assess_signals(
+    signals: TrackingSignals, thresholds: TrackingThresholds
+) -> list[str]:
+    """Return uncertainty reasons (empty list = confident)."""
+    reasons: list[str] = []
+    exp = signals.expected_area_ratio or 1.0
+    rel = signals.size_ratio / exp
+    if not (thresholds.size_min_ratio <= rel <= thresholds.size_max_ratio):
+        reasons.append("size_change")
+    if signals.anchor_area_ratio is not None and not (
+        thresholds.anchor_min_ratio
+        <= signals.anchor_area_ratio
+        <= thresholds.anchor_max_ratio
+    ):
+        reasons.append("anchor_size_drift")
+    if signals.embed_similarity < thresholds.uncertain_similarity:
+        reasons.append("low_similarity")
+    if signals.sam_score < thresholds.min_sam_score:
+        reasons.append("low_sam_score")
+    if signals.center_jump > thresholds.max_center_jump:
+        reasons.append("center_jump")
+    if signals.dense_iou is not None and signals.dense_iou < thresholds.min_dense_iou:
+        reasons.append("low_dense_iou")
+    return reasons
+
+
+def update_area_trend(
+    expected_area_ratio: float,
+    observed_area_ratio: Optional[float],
+    alpha: float = 0.3,
+    clamp: tuple[float, float] = (0.5, 2.0),
+) -> float:
+    """Running (log-space EMA) estimate of the per-frame area change.
+
+    Feed the observed ``signals.size_ratio`` of each accepted step; pass the
+    result as ``expected_area_ratio`` for the next step of the same track.
+    """
+    if not observed_area_ratio or observed_area_ratio <= 0:
+        return expected_area_ratio
+    prev = np.log(max(expected_area_ratio, 1e-6))
+    obs = np.log(observed_area_ratio)
+    val = float(np.exp((1 - alpha) * prev + alpha * obs))
+    return float(min(clamp[1], max(clamp[0], val)))
+
+
 @dataclass
 class PropagationResult:
     """Result of a propagation attempt."""
@@ -42,22 +240,57 @@ class PropagationResult:
     area_ratio: float
     method: str  # "peak", "dense", or "iou_match"
     iou_score: Optional[float] = None  # IoU with dense prediction (if verified)
+    status: str = STATUS_OK  # "ok" | "needs_review"
+    reasons: list[str] = field(default_factory=list)
+    signals: Optional[TrackingSignals] = None
+
+    @property
+    def uncertain(self) -> bool:
+        return self.status == STATUS_NEEDS_REVIEW
+
+    def uncertainty(self) -> dict:
+        """JSON-friendly status/reasons/signals (event payload)."""
+        return {
+            "status": self.status,
+            "reasons": list(self.reasons),
+            "signals": self.signals.to_dict() if self.signals else None,
+        }
 
 
 class PropagationError(Exception):
-    """Base exception for propagation failures."""
+    """Base exception for propagation failures.
 
-    pass
+    ``reason`` is a short machine-readable code and ``signals`` holds the
+    best (rejected) candidate's signals, if any, for event emission.
+    """
+
+    def __init__(
+        self,
+        message: str = "",
+        reason: str = "error",
+        signals: Optional[TrackingSignals] = None,
+    ):
+        super().__init__(message)
+        self.reason = reason
+        self.signals = signals
+
+    def to_dict(self) -> dict:
+        return {
+            "status": "lost",
+            "reason": self.reason,
+            "message": str(self),
+            "signals": self.signals.to_dict() if self.signals else None,
+        }
 
 
 class PropagationSizeMismatchError(PropagationError):
-    """Object size changed too much between frames."""
+    """Object size changed too much (only raised with stop_on_size_mismatch=True)."""
 
     pass
 
 
 class PropagationNotFoundError(PropagationError):
-    """Could not find object in target image."""
+    """Could not find a plausible object candidate in target image (lost)."""
 
     pass
 
@@ -571,13 +804,28 @@ class PropagateService:
 
             logger.debug(f"Dense mask area: {dense_mask.sum()}")
 
-        # Calculate source area for size checking
-        source_area = (source_bbox[2] - source_bbox[0]) * (
-            source_bbox[3] - source_bbox[1]
-        )
+        thresholds: Optional[TrackingThresholds] = kwargs.pop("thresholds", None)
+        size_min_ratio = kwargs.pop("size_min_ratio", DEFAULT_SIZE_MIN_RATIO)
+        size_max_ratio = kwargs.pop("size_max_ratio", DEFAULT_SIZE_MAX_RATIO)
+        min_score = kwargs.pop("min_score", DEFAULT_MIN_SIMILARITY)
+        if thresholds is None:
+            thresholds = TrackingThresholds(
+                size_min_ratio=size_min_ratio,
+                size_max_ratio=size_max_ratio,
+                lost_similarity=min_score,
+                min_dense_iou=iou_threshold,
+            )
+        expected_area_ratio = kwargs.get("expected_area_ratio", 1.0)
+        anchor_mask_area = kwargs.get("anchor_mask_area")
+        source_mask_area = (
+            float(np.count_nonzero(source_mask)) if source_mask is not None else None
+        ) or None
 
-        result = None
-        method_used = None
+        result: Optional[PropagationResult] = None
+        # Peak result that failed dense-IoU verification: kept as a
+        # needs_review fallback instead of declaring the object lost.
+        unverified_peak: Optional[PropagationResult] = None
+        lost_error: Optional[PropagationError] = None
 
         # Try peak-based propagation first (unless mode is "dense")
         if mode in ["peak", "auto"]:
@@ -592,61 +840,45 @@ class PropagateService:
                     annotation_id=annotation_id,
                     use_bbox_hint=use_bbox_hint,
                     bbox_hint_scale=bbox_hint_scale,
+                    prune_thin_artifacts=prune_thin_artifacts,
+                    thresholds=thresholds,
                     **kwargs,
                 )
-                if peak_result:
-                    bbox, mask, confidence, fallback_used, area_ratio = peak_result
-
-                    # IoU verification against dense prediction
-                    iou_score = None
-                    if iou_verify and dense_mask is not None:
-                        iou_score = mask_iou(mask, dense_mask)
-                        logger.debug(f"Peak result IoU with dense: {iou_score:.3f}")
-
-                        if iou_score < iou_threshold:
-                            logger.info(
-                                f"Peak result rejected: IoU {iou_score:.3f} < {iou_threshold}"
-                            )
-                            # Don't use this result
-                        else:
-                            result = PropagationResult(
-                                bbox=bbox,
-                                mask=mask,
-                                confidence=confidence,
-                                fallback_used=fallback_used,
-                                area_ratio=area_ratio,
-                                method="peak",
-                                iou_score=iou_score,
-                            )
-                            method_used = "peak"
-                    else:
-                        result = PropagationResult(
-                            bbox=bbox,
-                            mask=mask,
-                            confidence=confidence,
-                            fallback_used=fallback_used,
-                            area_ratio=area_ratio,
-                            method="peak",
-                            iou_score=None,
+                if iou_verify and dense_mask is not None:
+                    iou_score = mask_iou(peak_result.mask, dense_mask)
+                    peak_result.iou_score = iou_score
+                    if peak_result.signals is not None:
+                        peak_result.signals.dense_iou = iou_score
+                        peak_result.reasons = assess_signals(
+                            peak_result.signals, thresholds
                         )
-                        method_used = "peak"
-            except (PropagationSizeMismatchError, PropagationNotFoundError) as e:
+                        peak_result.status = (
+                            STATUS_NEEDS_REVIEW if peak_result.reasons else STATUS_OK
+                        )
+                    if iou_score < iou_threshold:
+                        logger.info(
+                            f"Peak result unverified: IoU {iou_score:.3f} < {iou_threshold}"
+                        )
+                        unverified_peak = peak_result
+                    else:
+                        result = peak_result
+                else:
+                    result = peak_result
+            except PropagationError as e:
                 logger.info(f"Peak propagation failed: {e}")
+                lost_error = e
                 if mode == "peak":
                     raise
 
-        # Try dense + cached mask matching (if peak failed or mode is dense)
+        # Try dense + SAM (if peak failed/unverified or mode is dense)
         if result is None and mode in ["dense", "auto"] and dense_mask is not None:
             logger.info("Attempting dense propagation with SAM mask matching...")
 
-            # Use dense mask center to prompt SAM
-            # Find center of dense mask
             rows, cols = np.where(dense_mask > 0)
             if len(rows) > 0:
                 center_y = int(np.mean(rows))
                 center_x = int(np.mean(cols))
 
-                # Set image for SAM
                 self.segment_service.set_image(target_image, target_image_id)
 
                 try:
@@ -665,35 +897,23 @@ class PropagateService:
                         center_x, center_y, bbox_hint=bbox_hint
                     )
                     mask, bbox = self._postprocess_tracked_mask(
-                        mask,
-                        bbox,
-                        prune_thin_artifacts,
+                        mask, bbox, prune_thin_artifacts
                     )
 
-                    # Verify IoU
                     iou_score = mask_iou(mask, dense_mask)
                     if iou_score >= iou_threshold:
                         try:
                             mask, sam_score, bbox = self._rerun_segmentation_with_bbox(
-                                target_image,
-                                bbox,
-                                target_image_id,
+                                target_image, bbox, target_image_id
                             )
                             mask, bbox = self._postprocess_tracked_mask(
-                                mask,
-                                bbox,
-                                prune_thin_artifacts,
+                                mask, bbox, prune_thin_artifacts
                             )
                             iou_score = mask_iou(mask, dense_mask)
                         except Exception as e:
                             logger.warning(f"Dense bbox-pass refinement failed: {e}")
 
                     if iou_score >= iou_threshold:
-                        area_ratio = (
-                            mask.sum() / source_area if source_area > 0 else 1.0
-                        )
-
-                        # Get descriptor similarity for confidence
                         source_desc = self.embed_service.get_object_descriptor(
                             source_image,
                             source_bbox,
@@ -707,22 +927,44 @@ class PropagateService:
                         embed_sim = self.embed_service.compute_similarity(
                             source_desc, target_desc
                         )
-
-                        confidence = 0.5 * embed_sim + 0.3 * sam_score + 0.2 * iou_score
-
-                        result = PropagationResult(
-                            bbox=bbox,
-                            mask=mask,
-                            confidence=confidence,
-                            fallback_used=True,
-                            area_ratio=area_ratio,
-                            method="dense",
-                            iou_score=iou_score,
+                        signals = compute_signals(
+                            source_bbox=source_bbox,
+                            source_mask_area=source_mask_area,
+                            target_bbox=bbox,
+                            target_mask=mask,
+                            embed_similarity=embed_sim,
+                            sam_score=sam_score,
+                            img_w=img_w,
+                            img_h=img_h,
+                            anchor_mask_area=anchor_mask_area,
+                            expected_area_ratio=expected_area_ratio,
+                            dense_iou=iou_score,
                         )
-                        method_used = "dense"
-                        logger.info(
-                            f"Dense propagation succeeded: IoU={iou_score:.3f}, sim={embed_sim:.3f}"
-                        )
+                        if is_plausible(signals, thresholds):
+                            reasons = assess_signals(signals, thresholds)
+                            confidence = (
+                                0.5 * embed_sim + 0.3 * sam_score + 0.2 * iou_score
+                            )
+                            result = PropagationResult(
+                                bbox=bbox,
+                                mask=mask,
+                                confidence=float(confidence),
+                                fallback_used=True,
+                                area_ratio=float(signals.size_ratio),
+                                method="dense",
+                                iou_score=iou_score,
+                                status=STATUS_NEEDS_REVIEW if reasons else STATUS_OK,
+                                reasons=reasons,
+                                signals=signals,
+                            )
+                            logger.info(
+                                f"Dense propagation succeeded: IoU={iou_score:.3f}, "
+                                f"sim={embed_sim:.3f}, reasons={reasons}"
+                            )
+                        else:
+                            logger.info(
+                                f"Dense result implausible: {signals.to_dict()}"
+                            )
                     else:
                         logger.warning(
                             f"Dense SAM result rejected: IoU {iou_score:.3f} < {iou_threshold}"
@@ -730,11 +972,26 @@ class PropagateService:
                 except Exception as e:
                     logger.warning(f"Dense SAM prompting failed: {e}")
 
+        if result is None and unverified_peak is not None:
+            # Plausible peak candidate exists but disagrees with dense
+            # prediction: keep tracking, flag for review.
+            result = unverified_peak
+
         if result:
-            logger.info(f"Propagation succeeded using method: {method_used}")
+            logger.info(
+                f"Propagation succeeded using method: {result.method} ({result.status})"
+            )
             return result
 
-        raise PropagationNotFoundError("All propagation methods failed")
+        if lost_error is not None:
+            raise PropagationNotFoundError(
+                f"All propagation methods failed: {lost_error}",
+                reason=lost_error.reason,
+                signals=lost_error.signals,
+            )
+        raise PropagationNotFoundError(
+            "All propagation methods failed", reason="no_candidate"
+        )
 
     def propagate_annotation(
         self,
@@ -749,53 +1006,62 @@ class PropagateService:
         bbox_hint_scale: float = 1.15,
         prune_thin_artifacts: bool = True,
         top_k: int = 5,
-        min_score: float = 0.5,
+        min_score: float = DEFAULT_MIN_SIMILARITY,
         search_expansion: float = 0.3,
-        size_min_ratio: float = 0.8,
-        size_max_ratio: float = 1.2,
-        stop_on_size_mismatch: bool = True,
-    ) -> Optional[tuple[list[float], np.ndarray, float, bool, float]]:
+        size_min_ratio: float = DEFAULT_SIZE_MIN_RATIO,
+        size_max_ratio: float = DEFAULT_SIZE_MAX_RATIO,
+        stop_on_size_mismatch: bool = False,
+        expected_area_ratio: float = 1.0,
+        anchor_mask_area: Optional[float] = None,
+        thresholds: Optional[TrackingThresholds] = None,
+    ) -> PropagationResult:
         """
         Propagate an annotation from source to target image.
 
         Strategy:
         1. Compute similarity map between source descriptor and target features
-        2. Find peak location in similarity map
-        3. Use peak point to prompt SAM
-        4. Verify result with embedding comparison
-        5. Check size consistency - reject if bbox size differs too much from source
+        2. Prompt SAM at the top similarity peaks
+        3. Compute tracking signals per candidate (embedding similarity, SAM
+           score, mask/bbox area ratio, anchor area ratio, centre jump)
+        4. Drop implausible candidates (low similarity / vanished). If none
+           remain -> PropagationNotFoundError (object lost).
+        5. Pick the best candidate (prefer size-consistent, then similarity),
+           refine it, and mark it ``needs_review`` if any signal is off.
+
+        Size change alone never stops tracking unless the legacy
+        ``stop_on_size_mismatch=True`` is passed.
 
         Args:
-            source_image: Source image (RGB numpy array)
-            source_bbox: Source bbox [x1, y1, x2, y2]
-            source_mask: Source mask (optional, for better descriptor)
-            target_image: Target image (RGB numpy array)
-            source_image_id: ID for caching source features
-            target_image_id: ID for caching target features
-            annotation_id: Annotation ID for caching
-            top_k: Number of peak locations to try
-            min_score: Minimum similarity score threshold
-            search_expansion: Unused, kept for API compatibility
-            size_min_ratio: Minimum area ratio (e.g. 0.8 for 80%)
-            size_max_ratio: Maximum area ratio (e.g. 1.2 for 120%)
-            stop_on_size_mismatch: If True, return None when no size-OK result; if False, use fallback
+            min_score: Lost threshold on embedding similarity
+            size_min_ratio / size_max_ratio: Allowed per-frame area ratio band
+                (relative to ``expected_area_ratio``) before flagging uncertain
+            expected_area_ratio: Adaptive area trend (see update_area_trend)
+            anchor_mask_area: Mask area of the nearest trusted (approved)
+                annotation of this object, if known
+            thresholds: Full threshold override (takes precedence)
 
         Returns:
-            Tuple of (bbox, mask, confidence, fallback_used, area_ratio) or None if propagation fails
-            fallback_used is True if best-similarity result was used due to no size-match
-            area_ratio is the size ratio (new_area / old_area)
+            PropagationResult (method="peak") with status/reasons/signals.
         """
         import torch.nn.functional as F
 
+        if thresholds is None:
+            thresholds = TrackingThresholds(
+                size_min_ratio=size_min_ratio,
+                size_max_ratio=size_max_ratio,
+                lost_similarity=min_score,
+            )
+
         img_h, img_w = target_image.shape[:2]
 
-        # Calculate source bbox area for size comparison
-        source_area = (source_bbox[2] - source_bbox[0]) * (
-            source_bbox[3] - source_bbox[1]
-        )
+        source_area = _bbox_area(source_bbox)
+        source_mask_area = (
+            float(np.count_nonzero(source_mask)) if source_mask is not None else None
+        ) or None
 
         logger.info(
-            f"Source bbox: {[int(x) for x in source_bbox]}, area: {source_area:.0f}"
+            f"Source bbox: {[int(x) for x in source_bbox]}, area: {source_area:.0f}, "
+            f"mask_area: {source_mask_area}"
         )
 
         # Get source descriptor
@@ -807,11 +1073,6 @@ class PropagateService:
             annotation_id=annotation_id,
         )
 
-        logger.info(
-            f"Source descriptor: norm={np.linalg.norm(source_descriptor):.4f}, "
-            f"min={source_descriptor.min():.4f}, max={source_descriptor.max():.4f}"
-        )
-
         # Get target features
         target_features = self.embed_service.get_image_features(
             target_image,
@@ -821,7 +1082,6 @@ class PropagateService:
         # Compute similarity map
         num_patches = self.embed_service._img_size // self.embed_service._patch_size
 
-        # Reshape features and compute similarity
         feats = target_features.squeeze(0)  # (num_patches, embed_dim)
         feats = F.normalize(feats, dim=-1)
 
@@ -831,23 +1091,32 @@ class PropagateService:
             similarity.reshape(num_patches, num_patches).float().cpu().numpy()
         )
 
-        # Find top-k peaks in similarity map
         flat_sim = similarity_map.flatten()
         peak_indices = np.argsort(flat_sim)[::-1]  # Descending order
 
         # Set target image for SAM
         self.segment_service.set_image(target_image, target_image_id)
 
-        # Try top peaks until we get a good match
-        tried_points = []
+        def make_signals(bbox, mask, sim, sam) -> TrackingSignals:
+            return compute_signals(
+                source_bbox=source_bbox,
+                source_mask_area=source_mask_area,
+                target_bbox=bbox,
+                target_mask=mask,
+                embed_similarity=sim,
+                sam_score=sam,
+                img_w=img_w,
+                img_h=img_h,
+                anchor_mask_area=anchor_mask_area,
+                expected_area_ratio=expected_area_ratio,
+            )
 
-        # Store results: size-acceptable results and all valid results for fallback
-        size_acceptable_results: list[
-            tuple[list[float], np.ndarray, float, float, float]
-        ] = []  # bbox, mask, confidence, similarity, area_ratio
-        all_valid_results: list[
-            tuple[list[float], np.ndarray, float, float, float]
+        tried_points: list[tuple[float, float]] = []
+        # (bbox, mask, confidence, signals, reasons)
+        candidates: list[
+            tuple[list[float], np.ndarray, float, TrackingSignals, list[str]]
         ] = []
+        best_rejected: Optional[TrackingSignals] = None
 
         for i in range(min(top_k * 3, len(peak_indices))):  # Try more peaks
             peak_idx = peak_indices[i]
@@ -858,26 +1127,15 @@ class PropagateService:
             point_y = (py + 0.5) / num_patches * img_h
 
             # Skip if too close to already tried points
-            too_close = False
-            for tx, ty in tried_points:
-                if (
-                    abs(point_x - tx) < img_w * 0.05
-                    and abs(point_y - ty) < img_h * 0.05
-                ):
-                    too_close = True
-                    break
-            if too_close:
+            if any(
+                abs(point_x - tx) < img_w * 0.05 and abs(point_y - ty) < img_h * 0.05
+                for tx, ty in tried_points
+            ):
                 continue
 
             tried_points.append((point_x, point_y))
-
             if len(tried_points) > top_k:
                 break
-
-            peak_sim = flat_sim[peak_idx]
-            logger.info(
-                f"Trying peak #{len(tried_points)}: ({point_x:.1f}, {point_y:.1f}), sim={peak_sim:.3f}"
-            )
 
             try:
                 bbox_hint = None
@@ -891,7 +1149,6 @@ class PropagateService:
                         scale=bbox_hint_scale,
                     )
 
-                # Use point to prompt SAM
                 mask, sam_score, refined_bbox = self.segment_service.segment_with_point(
                     point_x,
                     point_y,
@@ -902,172 +1159,111 @@ class PropagateService:
                     refined_bbox,
                     prune_thin_artifacts,
                 )
+                if _bbox_area(refined_bbox) <= 0:
+                    continue
 
-                # Verify with embedding - compute descriptor of result
                 target_descriptor = self.embed_service.get_object_descriptor(
                     target_image,
                     refined_bbox,
                     mask=mask,
                     image_id=target_image_id,
                 )
-
                 embed_similarity = self.embed_service.compute_similarity(
                     source_descriptor, target_descriptor
                 )
-
-                # Combined confidence
                 confidence = 0.6 * embed_similarity + 0.4 * sam_score
 
-                # Check size consistency
-                result_area = (refined_bbox[2] - refined_bbox[0]) * (
-                    refined_bbox[3] - refined_bbox[1]
-                )
-                area_ratio = result_area / source_area if source_area > 0 else 1.0
-                size_acceptable = size_min_ratio <= area_ratio <= size_max_ratio
+                signals = make_signals(refined_bbox, mask, embed_similarity, sam_score)
+                if not is_plausible(signals, thresholds):
+                    if (
+                        best_rejected is None
+                        or signals.embed_similarity > best_rejected.embed_similarity
+                    ):
+                        best_rejected = signals
+                    logger.info(f"  Implausible candidate: {signals.to_dict()}")
+                    continue
 
+                reasons = assess_signals(signals, thresholds)
                 logger.info(
-                    f"  Result: sim={embed_similarity:.3f}, sam={sam_score:.3f}, "
-                    f"conf={confidence:.3f}, area_ratio={area_ratio:.2f}, size_ok={size_acceptable}, "
-                    f"bbox={[int(x) for x in refined_bbox]}"
+                    f"  Candidate: conf={confidence:.3f} reasons={reasons} "
+                    f"signals={signals.to_dict()}"
                 )
-
-                if embed_similarity >= min_score:
-                    # Store as valid result
-                    all_valid_results.append(
-                        (refined_bbox, mask, confidence, embed_similarity, area_ratio)
-                    )
-
-                    if size_acceptable:
-                        # Store as size-acceptable result
-                        size_acceptable_results.append(
-                            (
-                                refined_bbox,
-                                mask,
-                                confidence,
-                                embed_similarity,
-                                area_ratio,
-                            )
-                        )
-                        logger.debug(
-                            f"  Added to size-acceptable results (now {len(size_acceptable_results)})"
-                        )
+                candidates.append((refined_bbox, mask, confidence, signals, reasons))
 
             except Exception as e:
                 logger.warning(f"SAM failed for peak point: {e}")
                 continue
-        # Log all candidates for debugging
-        logger.info("=== Propagation candidates summary ===")
-        logger.info(f"Size-acceptable results ({len(size_acceptable_results)}):")
-        for i, (bbox, _, conf, sim, ratio) in enumerate(size_acceptable_results):
-            logger.info(
-                f"  {i + 1}. sim={sim:.3f}, ratio={ratio:.2f}, conf={conf:.3f}, bbox={[int(x) for x in bbox]}"
-            )
-        logger.info(f"All valid results ({len(all_valid_results)}):")
-        for i, (bbox, _, conf, sim, ratio) in enumerate(all_valid_results):
-            marker = " <-- size OK" if size_min_ratio <= ratio <= size_max_ratio else ""
-            logger.info(
-                f"  {i + 1}. sim={sim:.3f}, ratio={ratio:.2f}, conf={conf:.3f}, bbox={[int(x) for x in bbox]}{marker}"
-            )
-        logger.info("======================================")
 
-        # Select best result
-        def finalize_selected_result(
-            selected_result: tuple[list[float], np.ndarray, float, float, float],
-            fallback_used: bool,
-        ) -> tuple[list[float], np.ndarray, float, bool, float]:
-            (
-                selected_bbox,
-                selected_mask,
-                selected_confidence,
-                _,
-                selected_area_ratio,
-            ) = selected_result
-
-            try:
-                refined_mask, refined_sam_score, refined_bbox = (
-                    self._rerun_segmentation_with_bbox(
-                        target_image,
-                        selected_bbox,
-                        target_image_id,
-                    )
-                )
-                refined_mask, refined_bbox = self._postprocess_tracked_mask(
-                    refined_mask,
-                    refined_bbox,
-                    prune_thin_artifacts,
-                )
-                refined_descriptor = self.embed_service.get_object_descriptor(
-                    target_image,
-                    refined_bbox,
-                    mask=refined_mask,
-                    image_id=target_image_id,
-                )
-                refined_similarity = self.embed_service.compute_similarity(
-                    source_descriptor, refined_descriptor
-                )
-                refined_confidence = 0.6 * refined_similarity + 0.4 * refined_sam_score
-                refined_area = (refined_bbox[2] - refined_bbox[0]) * (
-                    refined_bbox[3] - refined_bbox[1]
-                )
-                refined_area_ratio = (
-                    refined_area / source_area if source_area > 0 else 1.0
-                )
-
-                logger.info(
-                    "Final bbox-pass refinement: "
-                    f"conf={refined_confidence:.3f}, area_ratio={refined_area_ratio:.2f}, "
-                    f"bbox={[int(x) for x in refined_bbox]}"
-                )
-
-                return (
-                    refined_bbox,
-                    refined_mask,
-                    refined_confidence,
-                    fallback_used,
-                    refined_area_ratio,
-                )
-            except Exception as e:
-                logger.warning(f"Final bbox-pass refinement failed: {e}")
-                return (
-                    selected_bbox,
-                    selected_mask,
-                    selected_confidence,
-                    fallback_used,
-                    selected_area_ratio,
-                )
-
-        if size_acceptable_results:
-            # Return best similarity among size-acceptable results
-            best = max(
-                size_acceptable_results, key=lambda x: x[3]
-            )  # Sort by similarity
-            logger.info(
-                f"Propagation succeeded with size-acceptable result: sim={best[3]:.3f}, ratio={best[4]:.2f}"
-            )
-            return finalize_selected_result(best, False)
-
-        if all_valid_results and not stop_on_size_mismatch:
-            # Fallback: return best similarity overall (only if allowed)
-            best = max(all_valid_results, key=lambda x: x[3])
-            logger.info(
-                f"Propagation using fallback (size mismatch): sim={best[3]:.3f}, ratio={best[4]:.2f}"
-            )
-            return finalize_selected_result(best, True)
-
-        if all_valid_results and stop_on_size_mismatch:
-            best = max(all_valid_results, key=lambda x: x[3])
+        if not candidates:
+            if best_rejected is not None and (
+                best_rejected.embed_similarity >= thresholds.lost_similarity
+            ):
+                reason = "object_vanished"
+            else:
+                reason = "low_similarity"
             logger.warning(
-                f"Size mismatch detected, stopping propagation (stop_on_size_mismatch=True). "
-                f"Best ratio was {best[4]:.2f}, allowed: {size_min_ratio}-{size_max_ratio}"
+                f"Object lost ({reason}): {len(tried_points)} peaks tried, "
+                f"no plausible candidate"
             )
-            raise PropagationSizeMismatchError(
-                f"Object size changed too much (ratio: {best[4]:.1f}x, allowed: {size_min_ratio:.1f}x-{size_max_ratio:.1f}x)"
+            raise PropagationNotFoundError(
+                f"Could not find object in target image ({reason})",
+                reason=reason,
+                signals=best_rejected,
             )
 
-        logger.warning(
-            f"All {len(tried_points)} peak points failed, similarity below {min_score}"
+        # Prefer size-consistent candidates, then highest similarity.
+        best = max(
+            candidates,
+            key=lambda c: ("size_change" not in c[4], c[3].embed_similarity),
         )
-        raise PropagationNotFoundError("Could not find object in target image")
+        bbox, mask, confidence, signals, reasons = best
+
+        # Final bbox-pass refinement (mirrors manual 'S' flow)
+        try:
+            r_mask, r_sam, r_bbox = self._rerun_segmentation_with_bbox(
+                target_image, bbox, target_image_id
+            )
+            r_mask, r_bbox = self._postprocess_tracked_mask(
+                r_mask, r_bbox, prune_thin_artifacts
+            )
+            if _bbox_area(r_bbox) > 0:
+                r_desc = self.embed_service.get_object_descriptor(
+                    target_image, r_bbox, mask=r_mask, image_id=target_image_id
+                )
+                r_sim = self.embed_service.compute_similarity(source_descriptor, r_desc)
+                r_signals = make_signals(r_bbox, r_mask, r_sim, r_sam)
+                if is_plausible(r_signals, thresholds):
+                    bbox, mask = r_bbox, r_mask
+                    confidence = 0.6 * r_sim + 0.4 * r_sam
+                    signals = r_signals
+                    reasons = assess_signals(r_signals, thresholds)
+        except Exception as e:
+            logger.warning(f"Final bbox-pass refinement failed: {e}")
+
+        if stop_on_size_mismatch and "size_change" in reasons:
+            raise PropagationSizeMismatchError(
+                f"Object size changed too much (ratio: {signals.size_ratio:.2f}x, "
+                f"allowed: {thresholds.size_min_ratio:.2f}x-{thresholds.size_max_ratio:.2f}x)",
+                reason="size_change",
+                signals=signals,
+            )
+
+        status = STATUS_NEEDS_REVIEW if reasons else STATUS_OK
+        logger.info(
+            f"Propagation {status}: conf={confidence:.3f} reasons={reasons} "
+            f"signals={signals.to_dict()}"
+        )
+        return PropagationResult(
+            bbox=bbox,
+            mask=mask,
+            confidence=float(confidence),
+            fallback_used="size_change" in reasons,
+            area_ratio=float(signals.size_ratio),
+            method="peak",
+            status=status,
+            reasons=reasons,
+            signals=signals,
+        )
 
     def propagate_sequence(
         self,
@@ -1110,46 +1306,48 @@ class PropagateService:
 
         # Get source image
         source_image, source_image_id = images[current_idx]
+        expected_area_ratio = 1.0
 
         for target_idx in range(current_idx + 1, end_idx):
             target_image, target_image_id = images[target_idx]
 
-            # Propagate
-            result = self.propagate_annotation(
-                source_image=source_image,
-                source_bbox=current_bbox,
-                source_mask=current_mask,
-                target_image=target_image,
-                source_image_id=source_image_id,
-                target_image_id=target_image_id,
-                annotation_id=annotation_id,
-            )
-
-            if result is None:
-                logger.info(f"Propagation stopped at frame {target_idx}: no result")
+            try:
+                result = self.propagate_annotation(
+                    source_image=source_image,
+                    source_bbox=current_bbox,
+                    source_mask=current_mask,
+                    target_image=target_image,
+                    source_image_id=source_image_id,
+                    target_image_id=target_image_id,
+                    annotation_id=annotation_id,
+                    expected_area_ratio=expected_area_ratio,
+                )
+            except PropagationError as e:
+                logger.info(f"Propagation stopped at frame {target_idx}: {e}")
                 break
 
-            new_bbox, new_mask, confidence, _, _ = result  # Unpack all 5 elements
-
-            if confidence < stop_threshold:
+            if result.confidence < stop_threshold:
                 logger.info(
                     f"Propagation stopped at frame {target_idx}: "
-                    f"confidence {confidence:.3f} < {stop_threshold}"
+                    f"confidence {result.confidence:.3f} < {stop_threshold}"
                 )
                 break
 
-            # Store result
-            results.append((target_idx, new_bbox, new_mask, confidence))
+            results.append((target_idx, result.bbox, result.mask, result.confidence))
 
-            # Callback for progress
             if callback:
-                callback(target_idx, new_bbox, new_mask, confidence)
+                callback(target_idx, result.bbox, result.mask, result.confidence)
+
+            if result.signals is not None:
+                expected_area_ratio = update_area_trend(
+                    expected_area_ratio, result.signals.size_ratio
+                )
 
             # Update for next iteration
             source_image = target_image
             source_image_id = target_image_id
-            current_bbox = new_bbox
-            current_mask = new_mask
+            current_bbox = result.bbox
+            current_mask = result.mask
 
         return results
 

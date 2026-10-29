@@ -723,7 +723,7 @@ export function SettingsModal() {
                 <div className="flex-1 space-y-1">
                   <Label htmlFor="stop-tracking">Stop tracking on size mismatch</Label>
                   <p className="text-xs text-muted-foreground">
-                    If enabled, tracking halts if the object size deviates beyond the min/max thresholds. Safer but less robust to occlusion.
+                    Off (default): a size change outside min/max is kept but saved as needs review (!) and tracking continues. On: tracking halts instead (legacy).
                   </p>
                 </div>
               </div>

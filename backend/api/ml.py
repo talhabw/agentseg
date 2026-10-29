@@ -21,9 +21,13 @@ from ml.embed import (
     get_available_models,
 )
 from ml.propagate import (
+    DEFAULT_MIN_SIMILARITY,
+    DEFAULT_SIZE_MAX_RATIO,
+    DEFAULT_SIZE_MIN_RATIO,
     PropagateService,
-    PropagationSizeMismatchError,
-    PropagationNotFoundError,
+    PropagationError,
+    PropagationResult,
+    update_area_trend,
 )
 from core.masks import mask_to_rle, rle_to_mask, mask_iou
 from core.polygons import mask_to_yolo_polygon
@@ -118,18 +122,32 @@ class PropagateRequest(BaseModel):
     use_bbox_hint: bool = True
     bbox_hint_scale: float = 1.15  # Scale applied to the tracking bbox hint
     prune_thin_artifacts: bool = True
-    size_min_ratio: float = 0.8  # Min allowed size ratio (e.g., 0.8x)
-    size_max_ratio: float = 1.2  # Max allowed size ratio (e.g., 1.2x)
-    stop_on_size_mismatch: bool = (
-        True  # If True, return None when no size-OK result; if False, use fallback
-    )
+    # Per-frame mask-area ratio band; outside -> needs_review (not lost)
+    size_min_ratio: float = DEFAULT_SIZE_MIN_RATIO
+    size_max_ratio: float = DEFAULT_SIZE_MAX_RATIO
+    # Legacy: if True, a size change raises (HTTP 400) instead of needs_review
+    stop_on_size_mismatch: bool = False
     skip_duplicate_threshold: float = (
         0.9  # Skip if IoU with existing annotation >= this (0 = disabled)
     )
     top_k: int = 5  # Number of peak candidates to try
+    min_similarity: float = DEFAULT_MIN_SIMILARITY  # below on all candidates -> lost
+    expected_area_ratio: float = 1.0  # adaptive area trend (from previous response)
+    anchor_annotation_id: Optional[int] = None  # trusted anchor; auto-lookup if None
+    use_anchor: bool = True
 
 
-class PropagateResponse(BaseModel):
+class TrackingStatusFields(BaseModel):
+    """Uncertainty fields shared by propagate responses."""
+
+    status: str = "ok"  # "ok" | "needs_review"
+    uncertain_reasons: list[str] = Field(default_factory=list)
+    signals: Optional[dict[str, Any]] = None  # TrackingSignals.to_dict()
+    # Updated area trend; pass back as expected_area_ratio on the next step
+    next_expected_area_ratio: float = 1.0
+
+
+class PropagateResponse(TrackingStatusFields):
     bbox: list[float]
     mask_rle: dict
     polygon: list[float]
@@ -341,6 +359,92 @@ def _bbox_duplicate_score(bbox1: list[float], bbox2: list[float]) -> float:
         return max(float(iou), float(containment))
 
     return float(iou)
+
+
+ANCHOR_SEARCH_MAX_IMAGES = 50
+
+
+def _annotation_mask_area(annotation) -> Optional[float]:
+    if annotation is None or not annotation.mask_rle:
+        return None
+    try:
+        area = float(np.count_nonzero(rle_to_mask(annotation.mask_rle)))
+        return area or None
+    except Exception as e:
+        logger.warning("Failed to decode anchor mask: %s", e)
+        return None
+
+
+def _find_anchor_mask_area(
+    store, source_ann, source_image_id: int, anchor_annotation_id: Optional[int]
+) -> Optional[float]:
+    """Mask area of the nearest trusted (approved) annotation of this object.
+
+    Explicit ``anchor_annotation_id`` wins. Otherwise: the source itself if
+    approved, else the track's most recent earlier anchor
+    (``store.find_track_anchor``). Untracked sources fall back to the nearest
+    earlier approved same-label annotation (closest centre to the source bbox)
+    within ANCHOR_SEARCH_MAX_IMAGES images.
+    """
+    if anchor_annotation_id is not None:
+        return _annotation_mask_area(store.get_annotation_by_id(anchor_annotation_id))
+    if source_ann.status == "approved":
+        return _annotation_mask_area(source_ann)
+
+    src_image = store.get_image_by_id(source_image_id)
+    track_id = getattr(source_ann, "track_id", None)
+    if track_id is not None:
+        found = store.find_track_anchor(
+            track_id,
+            before_image_index=src_image.order_index if src_image else None,
+        )
+        return _annotation_mask_area(found[0]) if found else None
+
+    if src_image is None or source_ann.bbox_xyxy is None:
+        return None
+    sb = source_ann.bbox_xyxy
+    scx, scy = (sb[0] + sb[2]) / 2, (sb[1] + sb[3]) / 2
+
+    earlier = sorted(
+        (
+            img
+            for img in store.list_images(src_image.project_id)
+            if img.order_index < src_image.order_index
+        ),
+        key=lambda img: img.order_index,
+        reverse=True,
+    )[:ANCHOR_SEARCH_MAX_IMAGES]
+    for img in earlier:
+        best, best_d = None, float("inf")
+        for a in store.list_annotations(img.id):
+            if (
+                a.label_id != source_ann.label_id
+                or a.status != "approved"
+                or a.bbox_xyxy is None
+            ):
+                continue
+            b = a.bbox_xyxy
+            d = float(np.hypot((b[0] + b[2]) / 2 - scx, (b[1] + b[3]) / 2 - scy))
+            if d < best_d:
+                best, best_d = a, d
+        if best is not None:
+            return _annotation_mask_area(best)
+    return None
+
+
+def _tracking_fields(result: PropagationResult, expected_area_ratio: float) -> dict:
+    """Response fields describing tracking certainty."""
+    observed = result.signals.size_ratio if result.signals else None
+    return {
+        "status": result.status,
+        "uncertain_reasons": list(result.reasons),
+        "signals": result.signals.to_dict() if result.signals else None,
+        "next_expected_area_ratio": update_area_trend(expected_area_ratio, observed),
+    }
+
+
+def _lost_detail(e: PropagationError) -> str:
+    return f"Object lost ({e.reason}): {e}"
 
 
 # ==================== SAM Endpoints ====================
@@ -742,6 +846,14 @@ async def propagate(request: PropagateRequest):
     source_image, src_w, src_h = _load_image(request.source_image_id)
     target_image, tgt_w, tgt_h = _load_image(request.target_image_id)
 
+    anchor_mask_area = (
+        _find_anchor_mask_area(
+            store, ann, request.source_image_id, request.anchor_annotation_id
+        )
+        if request.use_anchor
+        else None
+    )
+
     try:
         result = _propagate_service.propagate_annotation(
             source_image=source_image,
@@ -755,18 +867,16 @@ async def propagate(request: PropagateRequest):
             bbox_hint_scale=max(0.5, min(3.0, request.bbox_hint_scale)),
             prune_thin_artifacts=request.prune_thin_artifacts,
             top_k=request.top_k,
+            min_score=request.min_similarity,
             size_min_ratio=request.size_min_ratio,
             size_max_ratio=request.size_max_ratio,
             stop_on_size_mismatch=request.stop_on_size_mismatch,
+            expected_area_ratio=request.expected_area_ratio,
+            anchor_mask_area=anchor_mask_area,
         )
 
-        if result is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Propagation failed - could not find object in target",
-            )
-
-        new_bbox, new_mask, confidence, fallback_used, area_ratio = result
+        new_bbox, new_mask, confidence = result.bbox, result.mask, result.confidence
+        fallback_used, area_ratio = result.fallback_used, result.area_ratio
 
         # Check for duplicates / ID switches against existing target annotations
         dup = _check_duplicate(
@@ -797,11 +907,10 @@ async def propagate(request: PropagateRequest):
             possible_id_switch=dup.possible_id_switch,
             conflicting_track_id=dup.conflicting_track_id,
             conflicting_annotation_id=dup.conflicting_annotation_id,
+            **_tracking_fields(result, request.expected_area_ratio),
         )
-    except PropagationSizeMismatchError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except PropagationNotFoundError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except PropagationError as e:
+        raise HTTPException(status_code=400, detail=_lost_detail(e))
     except HTTPException:
         raise
     except Exception as e:
@@ -839,16 +948,20 @@ class PropagateAdvancedRequest(BaseModel):
     use_bbox_hint: bool = True
     bbox_hint_scale: float = 1.15
     prune_thin_artifacts: bool = True
-    size_min_ratio: float = 0.8
-    size_max_ratio: float = 1.2
-    stop_on_size_mismatch: bool = True
+    size_min_ratio: float = DEFAULT_SIZE_MIN_RATIO
+    size_max_ratio: float = DEFAULT_SIZE_MAX_RATIO
+    stop_on_size_mismatch: bool = False
     top_k: int = 5
+    min_similarity: float = DEFAULT_MIN_SIMILARITY
+    expected_area_ratio: float = 1.0
+    anchor_annotation_id: Optional[int] = None
+    use_anchor: bool = True
     skip_duplicate_threshold: float = (
         0.9  # Skip if IoU with existing >= this (0 = disabled)
     )
 
 
-class PropagateAdvancedResponse(BaseModel):
+class PropagateAdvancedResponse(TrackingStatusFields):
     bbox: list[float]
     mask_rle: dict
     polygon: list[float]
@@ -984,6 +1097,14 @@ async def propagate_advanced(request: PropagateAdvancedRequest):
     source_image, _, _ = _load_image(request.source_image_id)
     target_image, tgt_w, tgt_h = _load_image(request.target_image_id)
 
+    anchor_mask_area = (
+        _find_anchor_mask_area(
+            store, ann, request.source_image_id, request.anchor_annotation_id
+        )
+        if request.use_anchor
+        else None
+    )
+
     try:
         result = _propagate_service.propagate_with_dense_fallback(
             source_image=source_image,
@@ -1004,6 +1125,9 @@ async def propagate_advanced(request: PropagateAdvancedRequest):
             size_max_ratio=request.size_max_ratio,
             stop_on_size_mismatch=request.stop_on_size_mismatch,
             top_k=request.top_k,
+            min_score=request.min_similarity,
+            expected_area_ratio=request.expected_area_ratio,
+            anchor_mask_area=anchor_mask_area,
         )
 
         # Convert to response
@@ -1037,12 +1161,11 @@ async def propagate_advanced(request: PropagateAdvancedRequest):
             possible_id_switch=dup.possible_id_switch,
             conflicting_track_id=dup.conflicting_track_id,
             conflicting_annotation_id=dup.conflicting_annotation_id,
+            **_tracking_fields(result, request.expected_area_ratio),
         )
 
-    except PropagationSizeMismatchError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except PropagationNotFoundError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except PropagationError as e:
+        raise HTTPException(status_code=400, detail=_lost_detail(e))
     except Exception as e:
         logger.error(f"Advanced propagation failed: {e}")
         logger.error(traceback.format_exc())

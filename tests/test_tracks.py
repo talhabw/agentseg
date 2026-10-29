@@ -241,3 +241,26 @@ def test_duplicate_check_reports_id_switch(project):
 
     # Disabled threshold -> nothing
     assert not _check_duplicate(store, existing, bbox, np.zeros((1, 1), bool), box.id, 0, t1.id).skipped
+
+
+def test_anchor_mask_area_uses_track(project):
+    from backend.api.ml import _find_anchor_mask_area
+    from core.masks import mask_to_rle
+
+    proj, store = project
+    box = store.upsert_label(proj.id, "box")
+    imgs = store.list_images(proj.id)
+    t1 = store.create_track(proj.id, box.id)
+    t2 = store.create_track(proj.id, box.id)
+
+    def m(n):
+        a = np.zeros((100, 100), np.uint8)
+        a[:n, :n] = 1
+        return mask_to_rle(a)
+
+    # t1 anchor is far away; t2 anchor sits right on top of the source -> label+proximity would pick t2
+    store.create_annotation(imgs[0].id, box.id, [80, 80, 90, 90], mask_rle=m(10), track_id=t1.id)
+    store.create_annotation(imgs[0].id, box.id, [0, 0, 20, 20], mask_rle=m(20), track_id=t2.id)
+    src = store.create_annotation(imgs[1].id, box.id, [0, 0, 20, 20], status="pending",
+                                  mask_rle=m(12), track_id=t1.id)
+    assert _find_anchor_mask_area(store, src, imgs[1].id, None) == 100.0

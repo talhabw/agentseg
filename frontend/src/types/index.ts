@@ -33,7 +33,7 @@ export interface Annotation {
   mask_rle: object | null;
   source: 'manual' | 'propagated' | 'tracked' | 'yolo' | 'yolo_sam' | 'yolo_seg';
   confidence: number | null;
-  status: 'approved' | 'pending' | 'rejected';
+  status: 'approved' | 'pending' | 'needs_review' | 'rejected';
   track_id?: number | null;  // Object identity (tracks.id); null = untracked
   is_anchor?: boolean;  // approved annotation a track can re-initialise from
 }
@@ -79,6 +79,26 @@ export interface PropagateResult extends TrackIdentityFields {
   duplicate_skipped?: boolean;  // True if propagation was skipped due to duplicate
   duplicate_iou?: number;  // IoU with the overlapping annotation
   conflicting_label_name?: string | null;  // If skipped due to different class at same location
+  status?: TrackingStatus;
+  uncertain_reasons?: string[];
+  signals?: TrackingSignals | null;
+  next_expected_area_ratio?: number;
+}
+
+// Tracking uncertainty (issue #5). 'needs_review' = plausible but uncertain;
+// a lost object is reported as an HTTP 400 error instead.
+export type TrackingStatus = 'ok' | 'needs_review';
+
+export interface TrackingSignals {
+  embed_similarity: number;
+  sam_score: number;
+  bbox_area_ratio: number;
+  mask_area_ratio: number | null;
+  anchor_area_ratio: number | null;
+  center_jump: number;
+  expected_area_ratio: number;
+  touches_border: boolean;
+  dense_iou: number | null;
 }
 
 // Point for refinement
@@ -127,6 +147,10 @@ export interface PropagateAdvancedResult extends TrackIdentityFields {
   duplicate_skipped?: boolean;
   duplicate_iou?: number;
   conflicting_label_name?: string | null;  // If skipped due to different class at same location
+  status?: TrackingStatus;
+  uncertain_reasons?: string[];
+  signals?: TrackingSignals | null;
+  next_expected_area_ratio?: number;
 }
 
 // Propagation mode for advanced propagation
