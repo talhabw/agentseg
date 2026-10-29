@@ -200,6 +200,7 @@ async function runPerformancePropagation() {
       bbox: [number, number, number, number];
       mask_rle: object;
       polygon: number[];
+      status?: string; // "ok" | "needs_review" (issue #5)
     }> = [];
     const failedLabels = new Set<number>();
     let duplicateSkipCount = 0;
@@ -253,6 +254,7 @@ async function runPerformancePropagation() {
           bbox: result.bbox,
           mask_rle: result.mask_rle,
           polygon: result.polygon,
+          status: result.status,
         });
       } catch (err) {
         console.error(`[PERF] Failed to propagate annotation ${ann.id}:`, err);
@@ -311,6 +313,7 @@ async function runPerformancePropagation() {
               bbox: result.bbox,
               mask_rle: result.mask_rle,
               polygon: result.polygon,
+              status: result.status,
             });
             fallbackSuccess = true;
           } catch (err) {
@@ -336,7 +339,7 @@ async function runPerformancePropagation() {
           mask_rle: result.mask_rle,
           polygon: result.polygon,
           source: 'tracked',
-          status: 'pending',
+          status: result.status === 'needs_review' ? 'needs_review' : 'pending',
         });
       } catch (err) {
         console.error(`[PERF] Failed to create annotation:`, err);
@@ -746,6 +749,7 @@ function AppContent() {
         bbox: [number, number, number, number];
         mask_rle: object;
         polygon: number[];
+      status?: string; // "ok" | "needs_review" (issue #5)
       }> = [];
       let duplicateSkipCount = 0;
       const notFoundLabels: { labelId: number; labelName: string }[] = [];  // Labels where object wasn't found in target
@@ -846,6 +850,7 @@ function AppContent() {
             bbox: result.bbox,
             mask_rle: result.mask_rle,
             polygon: result.polygon,
+            status: result.status,
           });
         } catch (err: unknown) {
           console.error(`${logPrefix} Propagation failed for annotation:`, ann.id, err);
@@ -945,6 +950,7 @@ function AppContent() {
                 bbox: result.bbox,
                 mask_rle: result.mask_rle,
                 polygon: result.polygon,
+                status: result.status,
               });
               fallbackCount++;
               fallbackSuccess = true;
@@ -1000,7 +1006,7 @@ function AppContent() {
                   mask_rle: result.mask_rle,
                   polygon: result.polygon,
                   source: 'tracked',
-                  status: 'pending',
+                  status: result.status === 'needs_review' ? 'needs_review' : 'pending',
                 });
               } catch (err) {
                 console.error(`${logPrefix} Failed to create annotation:`, err);
@@ -1058,7 +1064,7 @@ function AppContent() {
             mask_rle: result.mask_rle,
             polygon: result.polygon,
             source: 'tracked',
-            status: 'pending',
+            status: result.status === 'needs_review' ? 'needs_review' : 'pending',
           });
         } catch (err) {
           console.error(`${logPrefix} Failed to create tracked annotation:`, err);
