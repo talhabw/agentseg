@@ -13,7 +13,6 @@ export function PerformancePropagationOverlay() {
   // Only depend on isActive, not the whole object, to avoid resetting the interval on every progress update
   useEffect(() => {
     if (!isActive) return;
-    setNow(Date.now()); // Reset clock when propagation starts
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [isActive]);
