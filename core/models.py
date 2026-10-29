@@ -76,7 +76,13 @@ class Annotation:
     status: str = "approved"  # "approved" | "needs_review" | "rejected"
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    
+    track_id: Optional[int] = None  # Object identity (tracks.id); None = untracked
+
+    @property
+    def is_anchor(self) -> bool:
+        """Anchor/keyframe: a human/agent-approved annotation a track can re-initialise from."""
+        return self.status == "approved"
+
     @property
     def bbox_xyxy(self) -> Optional[list[float]]:
         """Parse bbox JSON to list."""
@@ -97,6 +103,20 @@ class Annotation:
         if self.mask_rle_json:
             return json.loads(self.mask_rle_json)
         return None
+
+
+@dataclass
+class Track:
+    """Object identity across frames. Annotations reference it via track_id."""
+    id: int
+    project_id: int
+    label_id: int
+    status: str = "active"  # "active" | "lost" | "ended"
+    name: Optional[str] = None
+    notes: Optional[str] = None
+    lost_at_image_id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 def bbox_to_json(bbox: list[float]) -> str:
