@@ -32,6 +32,7 @@ dependencies = [
     # SAM3 runtime dependencies (missing from sam3's base deps)
     "einops",
     "decord",
+    "setuptools<81",  # sam3 imports pkg_resources
     "psutil",
     "scipy",
     
