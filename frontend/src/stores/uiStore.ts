@@ -21,6 +21,7 @@ interface PerformanceProgress {
   startTime: number;
   failedImageIndex: number | null;
   failedLabels: string[];
+  performance: boolean; // full-screen overlay + frozen canvas (performance mode)
 }
 
 interface UIState {

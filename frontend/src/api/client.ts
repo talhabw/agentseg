@@ -10,6 +10,9 @@ import type {
   PropagateAdvancedResult,
   PropagationMode,
   Track,
+  TrackingJob,
+  TrackingJobEvent,
+  TrackingJobRequest,
 } from '../types';
 
 const api = axios.create({
@@ -613,6 +616,104 @@ export async function listDirectory(path: string, dirsOnly = true): Promise<Dire
 export async function getHomeDirectory(): Promise<{ path: string }> {
   const response = await api.get<{ path: string }>('/files/home');
   return response.data;
+}
+
+// ==================== Tracking jobs (backend orchestration, #3) ====================
+
+export async function startTrackingJob(req: TrackingJobRequest): Promise<TrackingJob> {
+  const response = await api.post<TrackingJob>('/track/jobs', req);
+  return response.data;
+}
+
+export async function getTrackingJob(jobId: string): Promise<TrackingJob> {
+  const response = await api.get<TrackingJob>(`/track/jobs/${jobId}`);
+  return response.data;
+}
+
+export async function getActiveTrackingJob(): Promise<TrackingJob | null> {
+  const response = await api.get<TrackingJob[]>('/track/jobs', { params: { active: true } });
+  return response.data[0] ?? null;
+}
+
+export async function stopTrackingJob(jobId: string): Promise<TrackingJob> {
+  const response = await api.post<TrackingJob>(`/track/jobs/${jobId}/stop`);
+  return response.data;
+}
+
+export async function resumeTrackingJob(jobId: string): Promise<TrackingJob> {
+  const response = await api.post<TrackingJob>(`/track/jobs/${jobId}/resume`);
+  return response.data;
+}
+
+export async function getTrackingJobEvents(
+  jobId: string,
+  after = 0,
+  wait = 0,
+): Promise<{ events: TrackingJobEvent[]; status: string; last_seq: number }> {
+  const response = await api.get(`/track/jobs/${jobId}/events`, { params: { after, wait } });
+  return response.data;
+}
+
+const TRACKING_EVENT_TYPES: TrackingJobEvent['type'][] = [
+  'started', 'frame_done', 'uncertain', 'possible_id_switch', 'object_lost',
+  'paused_waiting_for_label', 'reanchored', 'object_resumed', 'resumed', 'finished', 'error',
+];
+
+/**
+ * Follow a job's events via SSE, falling back to long-polling if SSE fails.
+ * Returns an unsubscribe function. Stops after `finished` / `error`.
+ */
+export function subscribeTrackingJob(
+  jobId: string,
+  onEvent: (ev: TrackingJobEvent) => void,
+  after = 0,
+): () => void {
+  let closed = false;
+  let lastSeq = after;
+  let source: EventSource | null = null;
+
+  const deliver = (ev: TrackingJobEvent) => {
+    if (closed || ev.seq <= lastSeq) return;
+    lastSeq = ev.seq;
+    onEvent(ev);
+    if (ev.type === 'finished' || ev.type === 'error') close();
+  };
+
+  const poll = async () => {
+    while (!closed) {
+      try {
+        const res = await getTrackingJobEvents(jobId, lastSeq, 10);
+        res.events.forEach(deliver);
+        if (!closed && res.events.length === 0 && !['running', 'paused', 'pending'].includes(res.status)) {
+          close();
+        }
+      } catch {
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+  };
+
+  const close = () => {
+    closed = true;
+    source?.close();
+  };
+
+  if (typeof EventSource !== 'undefined') {
+    source = new EventSource(`/api/track/jobs/${jobId}/stream?after=${after}`);
+    for (const type of TRACKING_EVENT_TYPES) {
+      source.addEventListener(type, (e) => deliver(JSON.parse((e as MessageEvent).data)));
+    }
+    source.onerror = () => {
+      // Server closes the stream after the last event; otherwise switch to polling.
+      if (closed) return;
+      source?.close();
+      source = null;
+      void poll();
+    };
+  } else {
+    void poll();
+  }
+  return close;
 }
 
 export default api;

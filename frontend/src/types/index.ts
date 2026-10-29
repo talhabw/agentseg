@@ -155,3 +155,80 @@ export interface PropagateAdvancedResult extends TrackIdentityFields {
 
 // Propagation mode for advanced propagation
 export type PropagationMode = 'peak' | 'dense' | 'auto';
+
+// ==================== Backend tracking jobs (#3) ====================
+
+export type TrackingJobStatus = 'pending' | 'running' | 'paused' | 'finished' | 'stopped' | 'error';
+export type TrackingFailureMode = 'stop' | 'skip' | 'continue';
+
+export interface TrackingJobRequest {
+  start_index?: number;
+  start_image_id?: number;
+  end_index?: number | null;
+  num_frames?: number;
+  track_ids?: number[] | null;
+  label_ids?: number[] | null;
+  failure_mode?: TrackingFailureMode;
+  performance?: boolean;
+  mode?: PropagationMode;
+  iou_verify?: boolean;
+  iou_threshold?: number;
+  use_cached_masks?: boolean;
+  use_bbox_hint?: boolean;
+  bbox_hint_scale?: number;
+  prune_thin_artifacts?: boolean;
+  size_min_ratio?: number;
+  size_max_ratio?: number;
+  top_k?: number;
+  min_similarity?: number;
+  duplicate_threshold?: number;
+}
+
+export interface TrackingJobPausedTrack {
+  track_id: number;
+  label_id: number;
+  label_name: string;
+}
+
+export interface TrackingJob {
+  id: string;
+  project_id: number;
+  status: TrackingJobStatus;
+  start_index: number;
+  end_index: number | null;
+  current_index: number;
+  current_image_id: number | null;
+  total_frames: number;
+  counts: Record<string, number>;
+  tracks: Array<{ track_id: number; label_id: number; state: string; expected_area_ratio: number }>;
+  paused: { image_id: number; image_index: number; tracks: TrackingJobPausedTrack[] } | null;
+  settings: Record<string, unknown> & { performance?: boolean; failure_mode?: TrackingFailureMode };
+  error: string | null;
+  last_seq: number;
+}
+
+/** Event emitted by a tracking job (see ml/tracking_job.py). Extra fields depend on `type`. */
+export interface TrackingJobEvent {
+  seq: number;
+  type:
+    | 'started' | 'frame_done' | 'uncertain' | 'possible_id_switch' | 'object_lost'
+    | 'paused_waiting_for_label' | 'reanchored' | 'object_resumed' | 'resumed'
+    | 'finished' | 'error';
+  job_id: string;
+  ts: number;
+  image_id?: number;
+  image_index?: number;
+  track_id?: number;
+  label_name?: string;
+  reason?: string;
+  message?: string;
+  reasons?: string[];
+  tracks?: TrackingJobPausedTrack[];
+  created?: Array<{ annotation_id: number; track_id: number; status: string }>;
+  skipped?: Array<{ track_id: number }>;
+  lost?: number[];
+  progress?: { done: number; total: number };
+  counts?: Record<string, number>;
+  paused?: 'job' | 'object';
+  [key: string]: unknown;
+}

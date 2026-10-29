@@ -5,7 +5,6 @@ ML API endpoints - SAM segmentation, embedding, propagation
 import gc
 import logging
 import traceback
-from dataclasses import dataclass
 import numpy as np
 import torch
 from fastapi import APIRouter, HTTPException
@@ -29,9 +28,20 @@ from ml.propagate import (
     PropagationResult,
     update_area_trend,
 )
-from core.masks import mask_to_rle, rle_to_mask, mask_iou
+from core.masks import mask_to_rle, rle_to_mask
 from core.polygons import mask_to_yolo_polygon
 from core.store import ProjectStore
+from ml.tracking_job import (  # shared tracking rules (moved from this module, #3)
+    ANCHOR_SEARCH_MAX_IMAGES,
+    DuplicateCheck,
+    annotation_mask_area as _annotation_mask_area,
+    annotation_overlap_score as _annotation_overlap_score,
+    bbox_duplicate_score as _bbox_duplicate_score,
+    check_duplicate as _check_duplicate,
+    find_anchor_mask_area as _find_anchor_mask_area,
+    find_duplicate_annotation as _find_duplicate_annotation,
+    get_job_manager,
+)
 from backend.api.projects import get_project, get_store
 from backend.yolo_autoannotate import (
     YoloAnnotateOptions,
@@ -183,253 +193,14 @@ def _load_image(image_id: int) -> tuple[np.ndarray, int, int]:
         raise HTTPException(status_code=500, detail=f"Failed to load image: {e}")
 
 
-@dataclass
-class DuplicateCheck:
-    """Result of comparing a propagated result against existing target annotations.
-
-    skipped: same object already annotated (same track, or untracked same-label,
-        or a different-label annotation at the same place) -> don't save.
-    possible_id_switch: overlaps a *different track* of the same label. Not
-        dropped silently: callers should save it flagged for review.
-    """
-
-    skipped: bool = False
-    iou: float = 0.0
-    conflicting_label_name: str | None = None
-    possible_id_switch: bool = False
-    conflicting_track_id: Optional[int] = None
-    conflicting_annotation_id: Optional[int] = None
-
-
-def _check_duplicate(
-    store,
-    existing_annotations,
-    new_bbox: list[float],
-    new_mask: Optional[np.ndarray],
-    source_label_id: int,
-    threshold: float,
-    source_track_id: Optional[int] = None,
-) -> DuplicateCheck:
-    """Compare a propagated result against existing annotations, track-aware.
-
-    Same-track (or untracked same-label) overlap -> duplicate, skip.
-    Different-track same-label overlap -> possible ID switch, reported.
-    Different-label overlap (stricter threshold) -> conflict, skip.
-    """
-    if threshold <= 0:
-        return DuplicateCheck()
-
-    same_label_threshold = threshold
-    different_label_threshold = max(threshold, 0.9)
-    id_switch: Optional[DuplicateCheck] = None
-
-    for existing_ann in existing_annotations:
-        score = _annotation_overlap_score(existing_ann, new_bbox, new_mask)
-        if score <= 0:
-            continue
-
-        is_same_label = existing_ann.label_id == source_label_id
-        required_score = same_label_threshold if is_same_label else different_label_threshold
-        if score < required_score:
-            continue
-
-        if is_same_label:
-            other_track = getattr(existing_ann, "track_id", None)
-            if (
-                source_track_id is not None
-                and other_track is not None
-                and other_track != source_track_id
-            ):
-                logger.info(
-                    "Possible ID switch: track %s overlaps track %s (overlap=%.3f, ann %s)",
-                    source_track_id,
-                    other_track,
-                    score,
-                    existing_ann.id,
-                )
-                if id_switch is None or score > id_switch.iou:
-                    id_switch = DuplicateCheck(
-                        iou=score,
-                        possible_id_switch=True,
-                        conflicting_track_id=other_track,
-                        conflicting_annotation_id=existing_ann.id,
-                    )
-                continue
-            logger.info(
-                "Skipping duplicate same-label annotation (overlap=%.3f with ann %s)",
-                score,
-                existing_ann.id,
-            )
-            return DuplicateCheck(
-                skipped=True, iou=score, conflicting_annotation_id=existing_ann.id
-            )
-
-        existing_label = store.get_label_by_id(existing_ann.label_id)
-        conflicting_label_name = (
-            existing_label.name if existing_label else f"label_{existing_ann.label_id}"
+def _ensure_no_running_job() -> None:
+    """The GPU services are shared with background tracking jobs (#3)."""
+    job = get_job_manager().active()
+    if job is not None and job.status == "running":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Tracking job {job.id} is running; stop or wait for it first",
         )
-        logger.info(
-            "Skipping - location already labeled as '%s' (overlap=%.3f with ann %s)",
-            conflicting_label_name,
-            score,
-            existing_ann.id,
-        )
-        return DuplicateCheck(
-            skipped=True,
-            iou=score,
-            conflicting_label_name=conflicting_label_name,
-            conflicting_annotation_id=existing_ann.id,
-        )
-
-    return id_switch or DuplicateCheck()
-
-
-def _find_duplicate_annotation(
-    store,
-    existing_annotations,
-    new_bbox: list[float],
-    new_mask: Optional[np.ndarray],
-    source_label_id: int,
-    threshold: float,
-) -> tuple[bool, float, str | None]:
-    """Legacy label-only wrapper around _check_duplicate (no track awareness)."""
-    r = _check_duplicate(
-        store, existing_annotations, new_bbox, new_mask, source_label_id, threshold
-    )
-    return r.skipped, r.iou, r.conflicting_label_name
-
-
-def _annotation_overlap_score(
-    annotation,
-    new_bbox: list[float],
-    new_mask: Optional[np.ndarray],
-) -> float:
-    """Return the best available overlap score for duplicate detection."""
-    scores: list[float] = []
-
-    if new_mask is not None and annotation.mask_rle:
-        try:
-            existing_mask = rle_to_mask(annotation.mask_rle)
-            if existing_mask.shape == new_mask.shape:
-                scores.append(mask_iou(new_mask, existing_mask))
-        except Exception as e:
-            logger.warning("Failed to compare masks for duplicate detection: %s", e)
-
-    if annotation.bbox_xyxy:
-        scores.append(_bbox_duplicate_score(new_bbox, annotation.bbox_xyxy))
-
-    return max(scores) if scores else 0.0
-
-
-def _bbox_duplicate_score(bbox1: list[float], bbox2: list[float]) -> float:
-    """Score bbox overlap for duplicate detection.
-
-    IoU catches similarly sized boxes. Intersection over the smaller box catches
-    cases where SAM/YOLO makes one box slightly tighter than the other while the
-    centers still refer to the same object.
-    """
-    x1 = max(bbox1[0], bbox2[0])
-    y1 = max(bbox1[1], bbox2[1])
-    x2 = min(bbox1[2], bbox2[2])
-    y2 = min(bbox1[3], bbox2[3])
-
-    if x2 <= x1 or y2 <= y1:
-        return 0.0
-
-    intersection = (x2 - x1) * (y2 - y1)
-    w1 = max(0.0, bbox1[2] - bbox1[0])
-    h1 = max(0.0, bbox1[3] - bbox1[1])
-    w2 = max(0.0, bbox2[2] - bbox2[0])
-    h2 = max(0.0, bbox2[3] - bbox2[1])
-    area1 = w1 * h1
-    area2 = w2 * h2
-    union = area1 + area2 - intersection
-    iou = intersection / union if union > 0 else 0.0
-
-    smaller_area = min(area1, area2)
-    containment = intersection / smaller_area if smaller_area > 0 else 0.0
-    cx1 = (bbox1[0] + bbox1[2]) / 2
-    cy1 = (bbox1[1] + bbox1[3]) / 2
-    cx2 = (bbox2[0] + bbox2[2]) / 2
-    cy2 = (bbox2[1] + bbox2[3]) / 2
-    center_distance = float(np.hypot(cx1 - cx2, cy1 - cy2))
-    smaller_diag = float(np.hypot(min(w1, w2), min(h1, h2)))
-
-    if smaller_diag > 0 and center_distance <= smaller_diag * 0.5:
-        return max(float(iou), float(containment))
-
-    return float(iou)
-
-
-ANCHOR_SEARCH_MAX_IMAGES = 50
-
-
-def _annotation_mask_area(annotation) -> Optional[float]:
-    if annotation is None or not annotation.mask_rle:
-        return None
-    try:
-        area = float(np.count_nonzero(rle_to_mask(annotation.mask_rle)))
-        return area or None
-    except Exception as e:
-        logger.warning("Failed to decode anchor mask: %s", e)
-        return None
-
-
-def _find_anchor_mask_area(
-    store, source_ann, source_image_id: int, anchor_annotation_id: Optional[int]
-) -> Optional[float]:
-    """Mask area of the nearest trusted (approved) annotation of this object.
-
-    Explicit ``anchor_annotation_id`` wins. Otherwise: the source itself if
-    approved, else the track's most recent earlier anchor
-    (``store.find_track_anchor``). Untracked sources fall back to the nearest
-    earlier approved same-label annotation (closest centre to the source bbox)
-    within ANCHOR_SEARCH_MAX_IMAGES images.
-    """
-    if anchor_annotation_id is not None:
-        return _annotation_mask_area(store.get_annotation_by_id(anchor_annotation_id))
-    if source_ann.status == "approved":
-        return _annotation_mask_area(source_ann)
-
-    src_image = store.get_image_by_id(source_image_id)
-    track_id = getattr(source_ann, "track_id", None)
-    if track_id is not None:
-        found = store.find_track_anchor(
-            track_id,
-            before_image_index=src_image.order_index if src_image else None,
-        )
-        return _annotation_mask_area(found[0]) if found else None
-
-    if src_image is None or source_ann.bbox_xyxy is None:
-        return None
-    sb = source_ann.bbox_xyxy
-    scx, scy = (sb[0] + sb[2]) / 2, (sb[1] + sb[3]) / 2
-
-    earlier = sorted(
-        (
-            img
-            for img in store.list_images(src_image.project_id)
-            if img.order_index < src_image.order_index
-        ),
-        key=lambda img: img.order_index,
-        reverse=True,
-    )[:ANCHOR_SEARCH_MAX_IMAGES]
-    for img in earlier:
-        best, best_d = None, float("inf")
-        for a in store.list_annotations(img.id):
-            if (
-                a.label_id != source_ann.label_id
-                or a.status != "approved"
-                or a.bbox_xyxy is None
-            ):
-                continue
-            b = a.bbox_xyxy
-            d = float(np.hypot((b[0] + b[2]) / 2 - scx, (b[1] + b[3]) / 2 - scy))
-            if d < best_d:
-                best, best_d = a, d
-        if best is not None:
-            return _annotation_mask_area(best)
-    return None
 
 
 def _tracking_fields(result: PropagationResult, expected_area_ratio: float) -> dict:
@@ -526,6 +297,7 @@ async def update_sam_settings(request: SAMSettingsRequest):
 @router.post("/unload")
 async def unload_all_models():
     """Unload all ML models to free GPU memory."""
+    _ensure_no_running_job()
     global _propagate_service, _current_embed_model
 
     unloaded = []
@@ -557,6 +329,7 @@ async def unload_all_models():
 @router.post("/unload/embed")
 async def unload_embed_model():
     """Unload embedding model to free GPU memory (for model switching)."""
+    _ensure_no_running_job()
     global _propagate_service, _current_embed_model
 
     unloaded = []
@@ -740,6 +513,7 @@ async def load_propagation(request: LoadModelRequest):
 
     Available embed_model options: vitb16, vitl16, vith16
     """
+    _ensure_no_running_job()
     global _propagate_service, _current_embed_model
 
     try:
@@ -819,6 +593,7 @@ async def propagation_status():
 @router.post("/propagate", response_model=PropagateResponse)
 async def propagate(request: PropagateRequest):
     """Propagate an annotation from source to target image."""
+    _ensure_no_running_job()
     global _propagate_service
 
     if _propagate_service is None:
@@ -1070,6 +845,7 @@ async def propagate_advanced(request: PropagateAdvancedRequest):
 
     When iou_verify is True, results are verified against dense prediction.
     """
+    _ensure_no_running_job()
     global _propagate_service
 
     if _propagate_service is None:

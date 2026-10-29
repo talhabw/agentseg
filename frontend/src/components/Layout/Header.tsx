@@ -1,6 +1,6 @@
 import { useUIStore } from '../../stores/uiStore';
 import { useProjectStore } from '../../stores/projectStore';
-import { stopAutoTracking } from '../../App';
+import { stopTracking } from '../../utils/trackingRunner';
 import { runYoloOnCurrentImage, startAutoYolo, stopAutoYolo } from '../../utils/yoloRunner';
 
 
@@ -212,7 +212,7 @@ export function Header() {
             onClick={() => {
               if (autoNext) {
                 // Stop auto-tracking - this now cancels in-progress propagation too
-                stopAutoTracking();
+                void stopTracking();
                 setAutoNext(false);
               } else {
                 setAutoNext(true);
