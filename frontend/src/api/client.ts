@@ -9,6 +9,7 @@ import type {
   FindAllInstancesResult,
   PropagateAdvancedResult,
   PropagationMode,
+  Track,
 } from '../types';
 
 const api = axios.create({
@@ -215,6 +216,7 @@ export async function createAnnotation(data: {
   status?: string;
   mask_rle?: object;
   polygon?: number[];
+  track_id?: number | null;  // omit for new initial labels -> backend creates a new track
 }): Promise<Annotation> {
   const response = await api.post<Annotation>('/annotations', data);
   return response.data;
@@ -228,6 +230,8 @@ export async function updateAnnotation(
     polygon: number[];
     mask_rle: object;
     status: string;
+    track_id: number;
+    clear_track: boolean;
   }>
 ): Promise<Annotation> {
   const response = await api.put<Annotation>(`/annotations/${annotationId}`, data);
@@ -264,15 +268,49 @@ export async function findFallbackReference(
   labelId: number,
   beforeImageIndex: number,
   projectId: number,
-  excludeImageIds?: number[]
+  excludeImageIds?: number[],
+  trackId?: number | null  // restrict to this object's anchors (#4)
 ): Promise<FallbackReferenceResult> {
   const response = await api.get<FallbackReferenceResult>(`/annotations/fallback/${labelId}`, {
     params: {
       before_image_index: beforeImageIndex,
       project_id: projectId,
       exclude_image_ids: excludeImageIds?.join(','),
+      track_id: trackId ?? undefined,
     },
   });
+  return response.data;
+}
+
+// ==================== Tracks (object identity, #4) ====================
+
+export async function listTracks(params?: { label_id?: number; status?: string }): Promise<Track[]> {
+  const response = await api.get<Track[]>('/tracks', { params });
+  return response.data;
+}
+
+export async function getTrackAnnotations(
+  trackId: number
+): Promise<Array<{ image_id: number; image_index: number; annotation: Annotation }>> {
+  const response = await api.get(`/tracks/${trackId}/annotations`);
+  return response.data;
+}
+
+export async function markTrackLost(trackId: number, imageId?: number): Promise<Track> {
+  const response = await api.post<Track>(`/tracks/${trackId}/lost`, { image_id: imageId ?? null });
+  return response.data;
+}
+
+export async function markTrackEnded(trackId: number): Promise<Track> {
+  const response = await api.post<Track>(`/tracks/${trackId}/end`);
+  return response.data;
+}
+
+export async function reanchorTrack(
+  trackId: number,
+  data: { image_id: number; annotation_id?: number; bbox?: number[]; mask_rle?: object; polygon?: number[] }
+): Promise<Annotation> {
+  const response = await api.post<Annotation>(`/tracks/${trackId}/reanchor`, data);
   return response.data;
 }
 

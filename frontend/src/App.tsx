@@ -77,18 +77,30 @@ function bboxDuplicateScore(box1: number[], box2: number[]): number {
 function isBatchDuplicate(
   labelId: number,
   bbox: number[],
-  existingResults: Array<{ label_id: number; bbox: [number, number, number, number] }>,
+  existingResults: Array<{ label_id: number; bbox: [number, number, number, number]; track_id?: number | null }>,
   threshold: number,
+  trackId: number | null = null,
 ): { duplicate: boolean; score: number } {
   for (const existing of existingResults) {
     const score = bboxDuplicateScore(bbox, existing.bbox);
     const requiredScore = existing.label_id === labelId ? threshold : Math.max(threshold, 0.9);
     if (score >= requiredScore) {
+      // Two different tracks of the same label collapsing onto one target: possible ID switch.
+      // Keep both (saved as pending for review) instead of silently dropping one.
+      if (existing.label_id === labelId && trackId != null && existing.track_id != null && existing.track_id !== trackId) {
+        console.warn(`Possible ID switch: track ${trackId} overlaps track ${existing.track_id} (score=${score.toFixed(3)})`);
+        continue;
+      }
       return { duplicate: true, score };
     }
   }
   return { duplicate: false, score: 0 };
 }
+
+// Failed propagation sources keyed by object: track if known, else label (legacy).
+type FailedSource = { labelId: number; trackId: number | null };
+const failedSourceKey = (labelId: number, trackId: number | null | undefined) =>
+  trackId != null ? `t${trackId}` : `l${labelId}`;
 
 // Module-level state - truly synchronous, survives React re-renders
 let _propagationLock = false;
@@ -200,8 +212,9 @@ async function runPerformancePropagation() {
       bbox: [number, number, number, number];
       mask_rle: object;
       polygon: number[];
+      track_id: number | null;
     }> = [];
-    const failedLabels = new Set<number>();
+    const failedLabels = new Map<string, FailedSource>();
     let duplicateSkipCount = 0;
 
     const { sizeMinRatio, sizeMaxRatio, stopOnSizeMismatch, topK, useBBoxHint, bboxHintScale, pruneThinArtifacts, propagationMode, iouVerify, iouThreshold, trackingDuplicateThreshold } = useUIStore.getState();
@@ -241,6 +254,7 @@ async function runPerformancePropagation() {
           result.bbox,
           propagationResults,
           trackingDuplicateThreshold,
+          ann.track_id ?? null,
         );
         if (batchDuplicate.duplicate) {
           console.log(`[PERF] Batch duplicate for label ${ann.label_id} (score=${batchDuplicate.score.toFixed(3)}), skipping`);
@@ -253,17 +267,18 @@ async function runPerformancePropagation() {
           bbox: result.bbox,
           mask_rle: result.mask_rle,
           polygon: result.polygon,
+          track_id: ann.track_id ?? null,
         });
       } catch (err) {
         console.error(`[PERF] Failed to propagate annotation ${ann.id}:`, err);
-        failedLabels.add(ann.label_id);
+        failedLabels.set(failedSourceKey(ann.label_id, ann.track_id), { labelId: ann.label_id, trackId: ann.track_id ?? null });
       }
     }
 
     // Try fallback for failed labels
     const stillFailedLabels: { labelId: number; labelName: string }[] = [];
     if (failedLabels.size > 0 && project) {
-      for (const labelId of failedLabels) {
+      for (const { labelId, trackId } of failedLabels.values()) {
         let fallbackSuccess = false;
         const triedImageIds: number[] = [..._sessionFailedImageIds];
         const MAX_FALLBACK_ATTEMPTS = 2;
@@ -272,7 +287,8 @@ async function runPerformancePropagation() {
           try {
             const fallbackResult = await api.findFallbackReference(
               labelId, currentIdx + 1, project.id,
-              triedImageIds.length > 0 ? triedImageIds : undefined
+              triedImageIds.length > 0 ? triedImageIds : undefined,
+              trackId,
             );
 
             if (!fallbackResult.found || !fallbackResult.annotation) break;
@@ -298,6 +314,7 @@ async function runPerformancePropagation() {
               result.bbox,
               propagationResults,
               trackingDuplicateThreshold,
+              trackId,
             );
             if (batchDuplicate.duplicate) {
               console.log(`[PERF] Fallback batch duplicate for label ${labelId} (score=${batchDuplicate.score.toFixed(3)}), skipping`);
@@ -311,6 +328,7 @@ async function runPerformancePropagation() {
               bbox: result.bbox,
               mask_rle: result.mask_rle,
               polygon: result.polygon,
+              track_id: trackId,
             });
             fallbackSuccess = true;
           } catch (err) {
@@ -336,6 +354,7 @@ async function runPerformancePropagation() {
           mask_rle: result.mask_rle,
           polygon: result.polygon,
           source: 'tracked',
+          track_id: result.track_id,
           status: 'pending',
         });
       } catch (err) {
@@ -719,7 +738,7 @@ function AppContent() {
     }
 
     // Track which labels failed propagation from previous image
-    const failedLabels = new Set<number>();
+    const failedLabels = new Map<string, FailedSource>();
     let fallbackCount = 0;
 
     try {
@@ -746,6 +765,7 @@ function AppContent() {
         bbox: [number, number, number, number];
         mask_rle: object;
         polygon: number[];
+        track_id: number | null;
       }> = [];
       let duplicateSkipCount = 0;
       const notFoundLabels: { labelId: number; labelName: string }[] = [];  // Labels where object wasn't found in target
@@ -828,6 +848,7 @@ function AppContent() {
             result.bbox,
             propagationResults,
             trackingDuplicateThreshold,
+            ann.track_id ?? null,
           );
           if (batchDuplicate.duplicate) {
             console.log(`${logPrefix} Batch duplicate detected for ann ${ann.id} (score=${batchDuplicate.score.toFixed(3)}), skipping`);
@@ -846,11 +867,12 @@ function AppContent() {
             bbox: result.bbox,
             mask_rle: result.mask_rle,
             polygon: result.polygon,
+            track_id: ann.track_id ?? null,
           });
         } catch (err: unknown) {
           console.error(`${logPrefix} Propagation failed for annotation:`, ann.id, err);
           // Track this label as failed for fallback attempt
-          failedLabels.add(ann.label_id);
+          failedLabels.set(failedSourceKey(ann.label_id, ann.track_id), { labelId: ann.label_id, trackId: ann.track_id ?? null });
         }
       }
 
@@ -863,7 +885,7 @@ function AppContent() {
         console.log(`${logPrefix} 🔄 Attempting fallback for ${failedLabels.size} failed labels (up to ${MAX_FALLBACK_ATTEMPTS} attempts each)...`);
         setStatus(`Finding fallback references for ${failedLabels.size} labels...`);
 
-        for (const labelId of failedLabels) {
+        for (const { labelId, trackId } of failedLabels.values()) {
           let fallbackSuccess = false;
           const triedImageIds: number[] = [..._sessionFailedImageIds]; // Start with session-failed images excluded
 
@@ -875,7 +897,8 @@ function AppContent() {
                 labelId,
                 currentIdx + 1, // beforeImageIndex - the target image index
                 project.id,
-                triedImageIds.length > 0 ? triedImageIds : undefined
+                triedImageIds.length > 0 ? triedImageIds : undefined,
+                trackId,
               );
 
               if (!fallbackResult.found || !fallbackResult.annotation) {
@@ -931,6 +954,7 @@ function AppContent() {
                 result.bbox,
                 propagationResults,
                 trackingDuplicateThreshold,
+                trackId,
               );
               if (batchDuplicate.duplicate) {
                 console.log(`${logPrefix} Fallback batch duplicate for label ${labelId} (score=${batchDuplicate.score.toFixed(3)}), skipping`);
@@ -945,6 +969,7 @@ function AppContent() {
                 bbox: result.bbox,
                 mask_rle: result.mask_rle,
                 polygon: result.polygon,
+                track_id: trackId,
               });
               fallbackCount++;
               fallbackSuccess = true;
@@ -1000,6 +1025,7 @@ function AppContent() {
                   mask_rle: result.mask_rle,
                   polygon: result.polygon,
                   source: 'tracked',
+                  track_id: result.track_id,
                   status: 'pending',
                 });
               } catch (err) {
@@ -1058,6 +1084,7 @@ function AppContent() {
             mask_rle: result.mask_rle,
             polygon: result.polygon,
             source: 'tracked',
+            track_id: result.track_id,
             status: 'pending',
           });
         } catch (err) {
