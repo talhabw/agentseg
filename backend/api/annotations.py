@@ -22,6 +22,13 @@ class AnnotationResponse(BaseModel):
     source: str
     confidence: Optional[float] = None
     status: str
+    track_id: Optional[int] = None
+    is_anchor: bool = False
+
+
+# Sources that continue an existing object rather than introduce a new one.
+# ("propagated" is used by find-instances for *new* objects, so it gets a track.)
+TRACKED_SOURCES = {"tracked"}
 
 
 class CreateAnnotationRequest(BaseModel):
@@ -33,6 +40,10 @@ class CreateAnnotationRequest(BaseModel):
     confidence: Optional[float] = None
     mask_rle: Optional[dict] = None
     polygon: Optional[list[float]] = None
+    # Object identity. If omitted, a new track is created automatically unless
+    # the source is 'tracked' or new_track=False.
+    track_id: Optional[int] = None
+    new_track: Optional[bool] = None
 
 
 class UpdateAnnotationRequest(BaseModel):
@@ -42,6 +53,8 @@ class UpdateAnnotationRequest(BaseModel):
     mask_rle: Optional[dict] = None
     status: Optional[str] = None
     confidence: Optional[float] = None
+    track_id: Optional[int] = None  # reassign to another track (e.g. fix an ID switch)
+    clear_track: bool = False  # set track_id = NULL
 
 
 def annotation_to_response(ann) -> AnnotationResponse:
@@ -56,6 +69,8 @@ def annotation_to_response(ann) -> AnnotationResponse:
         source=ann.source,
         confidence=ann.confidence,
         status=ann.status,
+        track_id=ann.track_id,
+        is_anchor=ann.is_anchor,
     )
 
 
@@ -85,6 +100,22 @@ async def create_annotation(request: CreateAnnotationRequest):
     store = get_store()
 
     try:
+        track_id = request.track_id
+        if track_id is not None:
+            if store.get_track(track_id) is None:
+                raise HTTPException(status_code=404, detail=f"Track {track_id} not found")
+        else:
+            want_new = (
+                request.new_track
+                if request.new_track is not None
+                else request.source not in TRACKED_SOURCES
+            )
+            if want_new:
+                image = store.get_image_by_id(request.image_id)
+                if image is None:
+                    raise HTTPException(status_code=404, detail="Image not found")
+                track_id = store.create_track(image.project_id, request.label_id).id
+
         ann = store.create_annotation(
             image_id=request.image_id,
             label_id=request.label_id,
@@ -94,8 +125,11 @@ async def create_annotation(request: CreateAnnotationRequest):
             confidence=request.confidence,
             mask_rle=request.mask_rle,
             polygon_norm=request.polygon,
+            track_id=track_id,
         )
         return annotation_to_response(ann)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -119,6 +153,12 @@ async def update_annotation(annotation_id: int, request: UpdateAnnotationRequest
         update_fields["status"] = request.status
     if request.confidence is not None:
         update_fields["confidence"] = request.confidence
+    if request.clear_track:
+        update_fields["track_id"] = None
+    elif request.track_id is not None:
+        if store.get_track(request.track_id) is None:
+            raise HTTPException(status_code=404, detail="Track not found")
+        update_fields["track_id"] = request.track_id
 
     if not update_fields:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -194,9 +234,14 @@ async def find_fallback_reference(
     before_image_index: int,
     project_id: int,
     exclude_image_ids: Optional[str] = None,
+    track_id: Optional[int] = None,
 ):
     """
     Find the first approved annotation for a label that can be used as a fallback reference.
+
+    If track_id is given, the search is restricted to that track (object), so
+    with several instances of one class we re-anchor from the right object.
+    Prefer GET /api/tracks/{track_id}/anchor for new clients.
 
     Searches backwards from before_image_index to find an approved annotation.
     This is used when propagation from the previous image fails.
@@ -210,6 +255,15 @@ async def find_fallback_reference(
     excluded: set[int] = set()
     if exclude_image_ids:
         excluded = {int(x) for x in exclude_image_ids.split(",") if x.strip()}
+
+    if track_id is not None:
+        found = store.find_track_anchor(track_id, before_image_index, excluded)
+        if found is None:
+            return FallbackReferenceResponse(found=False)
+        ann, img = found
+        return FallbackReferenceResponse(
+            found=True, annotation=annotation_to_response(ann), image_index=img.order_index
+        )
 
     # Get all images in project, sorted by order_index
     images = store.list_images(project_id)

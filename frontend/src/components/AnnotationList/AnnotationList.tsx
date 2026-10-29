@@ -307,6 +307,13 @@ export function AnnotationList() {
 
                   {/* Badges */}
                   <div className="flex items-center gap-1.5">
+                    {/* Track (object identity) */}
+                    {ann.track_id != null && (
+                      <span className="text-xs text-muted-foreground font-mono" title={`Track ${ann.track_id}${ann.is_anchor ? ' (anchor)' : ''}`}>
+                        T{ann.track_id}{ann.is_anchor ? '*' : ''}
+                      </span>
+                    )}
+
                     {/* Source icon */}
                     {ann.source !== 'manual' && (
                       <span className="text-xs opacity-70" title={`Source: ${ann.source}`}>

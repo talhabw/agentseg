@@ -5,6 +5,7 @@ ML API endpoints - SAM segmentation, embedding, propagation
 import gc
 import logging
 import traceback
+from dataclasses import dataclass
 import numpy as np
 import torch
 from fastapi import APIRouter, HTTPException
@@ -142,6 +143,11 @@ class PropagateResponse(BaseModel):
     conflicting_label_name: str | None = (
         None  # If skipped due to different class at same location
     )
+    # Object identity (#4): result belongs to the source annotation's track.
+    track_id: Optional[int] = None
+    possible_id_switch: bool = False  # overlaps another track of the same label
+    conflicting_track_id: Optional[int] = None
+    conflicting_annotation_id: Optional[int] = None
 
 
 def _load_image(image_id: int) -> tuple[np.ndarray, int, int]:
@@ -159,25 +165,45 @@ def _load_image(image_id: int) -> tuple[np.ndarray, int, int]:
         raise HTTPException(status_code=500, detail=f"Failed to load image: {e}")
 
 
-def _find_duplicate_annotation(
+@dataclass
+class DuplicateCheck:
+    """Result of comparing a propagated result against existing target annotations.
+
+    skipped: same object already annotated (same track, or untracked same-label,
+        or a different-label annotation at the same place) -> don't save.
+    possible_id_switch: overlaps a *different track* of the same label. Not
+        dropped silently: callers should save it flagged for review.
+    """
+
+    skipped: bool = False
+    iou: float = 0.0
+    conflicting_label_name: str | None = None
+    possible_id_switch: bool = False
+    conflicting_track_id: Optional[int] = None
+    conflicting_annotation_id: Optional[int] = None
+
+
+def _check_duplicate(
     store,
     existing_annotations,
     new_bbox: list[float],
     new_mask: Optional[np.ndarray],
     source_label_id: int,
     threshold: float,
-) -> tuple[bool, float, str | None]:
-    """Find an existing annotation that is effectively the same target object.
+    source_track_id: Optional[int] = None,
+) -> DuplicateCheck:
+    """Compare a propagated result against existing annotations, track-aware.
 
-    Tracking can make multiple same-class source objects collapse onto the same
-    target object. Mask IoU alone misses bbox-only annotations. Different-label
-    conflicts stay stricter to avoid suppressing nearby legitimate classes.
+    Same-track (or untracked same-label) overlap -> duplicate, skip.
+    Different-track same-label overlap -> possible ID switch, reported.
+    Different-label overlap (stricter threshold) -> conflict, skip.
     """
     if threshold <= 0:
-        return False, 0.0, None
+        return DuplicateCheck()
 
     same_label_threshold = threshold
     different_label_threshold = max(threshold, 0.9)
+    id_switch: Optional[DuplicateCheck] = None
 
     for existing_ann in existing_annotations:
         score = _annotation_overlap_score(existing_ann, new_bbox, new_mask)
@@ -190,12 +216,35 @@ def _find_duplicate_annotation(
             continue
 
         if is_same_label:
+            other_track = getattr(existing_ann, "track_id", None)
+            if (
+                source_track_id is not None
+                and other_track is not None
+                and other_track != source_track_id
+            ):
+                logger.info(
+                    "Possible ID switch: track %s overlaps track %s (overlap=%.3f, ann %s)",
+                    source_track_id,
+                    other_track,
+                    score,
+                    existing_ann.id,
+                )
+                if id_switch is None or score > id_switch.iou:
+                    id_switch = DuplicateCheck(
+                        iou=score,
+                        possible_id_switch=True,
+                        conflicting_track_id=other_track,
+                        conflicting_annotation_id=existing_ann.id,
+                    )
+                continue
             logger.info(
                 "Skipping duplicate same-label annotation (overlap=%.3f with ann %s)",
                 score,
                 existing_ann.id,
             )
-            return True, score, None
+            return DuplicateCheck(
+                skipped=True, iou=score, conflicting_annotation_id=existing_ann.id
+            )
 
         existing_label = store.get_label_by_id(existing_ann.label_id)
         conflicting_label_name = (
@@ -207,9 +256,29 @@ def _find_duplicate_annotation(
             score,
             existing_ann.id,
         )
-        return True, score, conflicting_label_name
+        return DuplicateCheck(
+            skipped=True,
+            iou=score,
+            conflicting_label_name=conflicting_label_name,
+            conflicting_annotation_id=existing_ann.id,
+        )
 
-    return False, 0.0, None
+    return id_switch or DuplicateCheck()
+
+
+def _find_duplicate_annotation(
+    store,
+    existing_annotations,
+    new_bbox: list[float],
+    new_mask: Optional[np.ndarray],
+    source_label_id: int,
+    threshold: float,
+) -> tuple[bool, float, str | None]:
+    """Legacy label-only wrapper around _check_duplicate (no track awareness)."""
+    r = _check_duplicate(
+        store, existing_annotations, new_bbox, new_mask, source_label_id, threshold
+    )
+    return r.skipped, r.iou, r.conflicting_label_name
 
 
 def _annotation_overlap_score(
@@ -699,24 +768,16 @@ async def propagate(request: PropagateRequest):
 
         new_bbox, new_mask, confidence, fallback_used, area_ratio = result
 
-        # Check for duplicates with existing annotations on target image
-        duplicate_skipped = False
-        duplicate_iou = 0.0
-        conflicting_label_name = None
-
-        if request.skip_duplicate_threshold > 0:
-            # Get existing annotations on target image
-            target_annotations = store.list_annotations(request.target_image_id)
-            duplicate_skipped, duplicate_iou, conflicting_label_name = (
-                _find_duplicate_annotation(
-                    store=store,
-                    existing_annotations=target_annotations,
-                    new_bbox=new_bbox,
-                    new_mask=new_mask,
-                    source_label_id=ann.label_id,
-                    threshold=request.skip_duplicate_threshold,
-                )
-            )
+        # Check for duplicates / ID switches against existing target annotations
+        dup = _check_duplicate(
+            store=store,
+            existing_annotations=store.list_annotations(request.target_image_id),
+            new_bbox=new_bbox,
+            new_mask=new_mask,
+            source_label_id=ann.label_id,
+            threshold=request.skip_duplicate_threshold,
+            source_track_id=ann.track_id,
+        )
 
         # Convert to RLE and polygon
         rle = mask_to_rle(new_mask)
@@ -729,9 +790,13 @@ async def propagate(request: PropagateRequest):
             confidence=float(confidence),
             fallback_used=fallback_used,
             area_ratio=area_ratio,
-            duplicate_skipped=duplicate_skipped,
-            duplicate_iou=duplicate_iou,
-            conflicting_label_name=conflicting_label_name,
+            duplicate_skipped=dup.skipped,
+            duplicate_iou=dup.iou,
+            conflicting_label_name=dup.conflicting_label_name,
+            track_id=ann.track_id,
+            possible_id_switch=dup.possible_id_switch,
+            conflicting_track_id=dup.conflicting_track_id,
+            conflicting_annotation_id=dup.conflicting_annotation_id,
         )
     except PropagationSizeMismatchError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -797,6 +862,11 @@ class PropagateAdvancedResponse(BaseModel):
     conflicting_label_name: str | None = (
         None  # If skipped due to different class at same location
     )
+    # Object identity (#4): result belongs to the source annotation's track.
+    track_id: Optional[int] = None
+    possible_id_switch: bool = False  # overlaps another track of the same label
+    conflicting_track_id: Optional[int] = None
+    conflicting_annotation_id: Optional[int] = None
 
 
 @router.post("/find-instances", response_model=FindAllInstancesResponse)
@@ -940,23 +1010,16 @@ async def propagate_advanced(request: PropagateAdvancedRequest):
         rle = mask_to_rle(result.mask)
         polygon = mask_to_yolo_polygon(result.mask, tgt_w, tgt_h)
 
-        # Check for duplicates with existing annotations on target image
-        duplicate_skipped = False
-        duplicate_iou = 0.0
-        conflicting_label_name = None
-
-        if request.skip_duplicate_threshold > 0:
-            target_annotations = store.list_annotations(request.target_image_id)
-            duplicate_skipped, duplicate_iou, conflicting_label_name = (
-                _find_duplicate_annotation(
-                    store=store,
-                    existing_annotations=target_annotations,
-                    new_bbox=result.bbox,
-                    new_mask=result.mask,
-                    source_label_id=ann.label_id,
-                    threshold=request.skip_duplicate_threshold,
-                )
-            )
+        # Check for duplicates / ID switches against existing target annotations
+        dup = _check_duplicate(
+            store=store,
+            existing_annotations=store.list_annotations(request.target_image_id),
+            new_bbox=result.bbox,
+            new_mask=result.mask,
+            source_label_id=ann.label_id,
+            threshold=request.skip_duplicate_threshold,
+            source_track_id=ann.track_id,
+        )
 
         return PropagateAdvancedResponse(
             bbox=result.bbox,
@@ -967,9 +1030,13 @@ async def propagate_advanced(request: PropagateAdvancedRequest):
             area_ratio=result.area_ratio,
             method=result.method,
             iou_score=result.iou_score,
-            duplicate_skipped=duplicate_skipped,
-            duplicate_iou=duplicate_iou,
-            conflicting_label_name=conflicting_label_name,
+            duplicate_skipped=dup.skipped,
+            duplicate_iou=dup.iou,
+            conflicting_label_name=dup.conflicting_label_name,
+            track_id=ann.track_id,
+            possible_id_switch=dup.possible_id_switch,
+            conflicting_track_id=dup.conflicting_track_id,
+            conflicting_annotation_id=dup.conflicting_annotation_id,
         )
 
     except PropagationSizeMismatchError as e:

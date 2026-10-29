@@ -34,6 +34,30 @@ export interface Annotation {
   source: 'manual' | 'propagated' | 'tracked' | 'yolo' | 'yolo_sam' | 'yolo_seg';
   confidence: number | null;
   status: 'approved' | 'pending' | 'rejected';
+  track_id?: number | null;  // Object identity (tracks.id); null = untracked
+  is_anchor?: boolean;  // approved annotation a track can re-initialise from
+}
+
+// Object identity fields returned by propagation endpoints (#4)
+export interface TrackIdentityFields {
+  track_id?: number | null;  // Track of the source annotation (result inherits it)
+  possible_id_switch?: boolean;  // Result overlaps another track of the same label
+  conflicting_track_id?: number | null;
+  conflicting_annotation_id?: number | null;
+}
+
+export interface Track {
+  id: number;
+  project_id: number;
+  label_id: number;
+  name: string | null;
+  notes: string | null;
+  status: 'active' | 'lost' | 'ended';
+  lost_at_image_id: number | null;
+  annotation_count: number;
+  anchor_count: number;
+  first_image_index: number | null;
+  last_image_index: number | null;
 }
 
 export type InteractionMode = 'view' | 'draw' | 'refine';
@@ -45,7 +69,7 @@ export interface SegmentResult {
   bbox: [number, number, number, number];
 }
 
-export interface PropagateResult {
+export interface PropagateResult extends TrackIdentityFields {
   bbox: [number, number, number, number];
   mask_rle: object;
   polygon: number[];
@@ -91,7 +115,7 @@ export interface FindAllInstancesResult {
 }
 
 // Advanced propagation result with method tracking
-export interface PropagateAdvancedResult {
+export interface PropagateAdvancedResult extends TrackIdentityFields {
   bbox: [number, number, number, number];
   mask_rle: object;
   polygon: number[];
