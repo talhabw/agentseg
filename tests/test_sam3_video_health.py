@@ -63,16 +63,18 @@ def test_loss_scope_jump_fragment_are_flagged():
     masks[21] = rect(50 + 21, 40, 70 + 21, 95)
     masks[30] = rect(150, 40, 170, 60)  # jump
     masks[35] = rect(85, 40, 95, 60) | rect(120, 40, 130, 60)  # split in two
-    hs = assess_track(masks, kfs, origin, (W, H))
+    cfg = HealthConfig(max_center_jump=0.5, max_aspect_log=0.4)
+    hs = assess_track(masks, kfs, origin, (W, H), cfg)
     st = statuses(hs)
     assert all(st[f] == LOST for f in range(10, 15))
     assert st[20] == REVIEW and st[30] == REVIEW and st[35] == REVIEW
-    issues = group_issues(hs, "t")
+    issues = group_issues(hs, "t", cfg)
     kinds = {i.kind for i in issues}
     lost = next(i for i in issues if i.kind == "lost")
     assert (lost.start, lost.end, lost.n_lost) == (10, 14, 5)
     assert lost.worst_frame == 12  # middle of the empty run
-    assert "scope" in kinds and "jump" in kinds
+    assert "scope" in kinds
+    assert any("jump" in i.reasons for i in issues) and any("fragment" in i.reasons for i in issues)
     scope = next(i for i in issues if i.kind == "scope")
     assert scope.start <= 20 <= scope.end and scope.worst_frame in (20, 21)
 
@@ -103,6 +105,30 @@ def test_border_excuses_shrink():
     for h in hs:
         if h.frame >= 20 and h.signals.get("touches_border"):
             assert not any(r in ("step_shrink", "kf_shrink", "kf_area_tiny") for r in h.reasons), h.to_dict()
+
+
+def test_edge_sliver_is_exit_issue():
+    masks, kfs, origin = steady_track()
+    for f in range(30, N):  # only a thin sliver left at the right border
+        masks[f] = rect(W - 3, 40, W, 60)
+    issues = group_issues(assess_track(masks, kfs, origin, (W, H)), "t")
+    assert [(i.kind, i.start, i.end) for i in issues] == [("exit", 30, N - 1)]
+
+
+def test_window_area_flags_sudden_shrink_but_not_slow_zoom():
+    masks, kfs, origin = steady_track()
+    zoom = {f: rect(50, 40, 70 + f, 60 + f // 2) for f in range(N)}  # grows slowly ~4x
+    hs = assess_track(zoom, {0: zoom[0]}, origin, (W, H))
+    assert all(h.status in (OK, KEYFRAME) for h in hs)
+    for f in range(20, 23):  # sudden partial occlusion, recovered by 23
+        masks[f] = rect(50 + f, 40, 56 + f, 50)
+    st = statuses(assess_track(masks, kfs, origin, (W, H)))
+    assert all(st[f] == REVIEW for f in range(20, 23)) and st[25] == OK
+
+
+def test_geometry_only_preset():
+    assert HealthConfig.geometry_only().kf_area_min == 0.3
+    assert HealthConfig.geometry_only(merge_gap=1).merge_gap == 1
 
 
 def test_backward_segment_uses_previous_frame_towards_keyframe():

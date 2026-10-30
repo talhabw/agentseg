@@ -12,6 +12,8 @@ step_area          area / area of the previous frame in tracking direction (towa
                    frame's keyframe), relative to an EMA area trend
                    (``ml.propagate.update_area_trend`` logic)
 kf_area            area / area of the keyframe this frame was tracked from
+win_area           area / median area of the previous ``area_window`` frames (slow zoom ok)
+edge               touches the border while small vs the keyframe: leaving / partly out
 jump               centre shift vs previous frame / previous bbox diagonal
 components         # connected components >= ``min_component_px``; largest component's share
 aspect / fill      |log| bbox aspect change vs keyframe; (area / bbox area) / keyframe's
@@ -56,40 +58,63 @@ REASON_KIND = {
     "step_shrink": "drift",
     "kf_shrink": "drift",
     "dino_low": "drift",
+    "win_shrink": "drift",
+    "win_grow": "scope",
     "jump": "jump",
     "fragment": "fragment",
+    "edge": "exit",
 }
-KIND_PRIORITY = ("lost", "scope", "jump", "fragment", "drift")
+KIND_PRIORITY = ("lost", "exit", "scope", "jump", "fragment", "drift")
 
 
 @dataclass
 class HealthConfig:
-    """Thresholds (defaults tuned in WP3 by scripts/oracle_agent.py, see its report)."""
+    """Thresholds. Defaults tuned in WP3 (``scripts/oracle_agent.py --tune --dino``) on the
+    torpedo sequence + its stress variants, assuming the DINO signal is on; use
+    ``HealthConfig.geometry_only()`` when no embedder is available.
+
+    Findings behind the defaults: legit scale change vs the keyframe spans 0.12x..2.9x and
+    the (duplicated-frame) footage jumps up to ~1.9 box diagonals between frames, so the
+    keyframe-area and jump checks are effectively off; sudden changes are judged against the
+    median of the last frames (``win_area``) and the occlusion / wrong-object case by DINO.
+    """
 
     # lost
-    lost_kf_area_ratio: float = 0.1  # area below this x keyframe area -> lost
+    lost_kf_area_ratio: float = 0.1  # area below this x keyframe area -> lost (unless at border)
     # per-step area change relative to the EMA trend
-    step_area_min: float = 0.7
-    step_area_max: float = 1.4
+    step_area_min: float = 0.5
+    step_area_max: float = 2.0
     trend_alpha: float = 0.3
     trend_clamp: tuple = (0.8, 1.25)
+    # vs median of the last ``area_window`` frames in tracking direction
+    area_window: int = 10
+    win_area_min: float = 0.4
+    win_area_max: float = 3.0
+    # touching the border with area below this x keyframe area -> "edge" (kind "exit")
+    edge_kf_area: float = 0.3
     # vs keyframe
-    kf_area_min: float = 0.5
-    kf_area_max: float = 1.8
-    max_aspect_log: float = math.log(1.5)  # |log(aspect / aspect_kf)|
-    min_fill_ratio: float = 0.8  # fill / fill_kf
+    kf_area_min: float = 0.05
+    kf_area_max: float = 10.0
+    max_aspect_log: float = 0.7  # |log(aspect / aspect_kf)|
+    min_fill_ratio: float = 0.6  # fill / fill_kf
     # motion / shape
-    max_center_jump: float = 0.25  # / previous bbox diagonal
+    max_center_jump: float = 3.0  # / previous bbox diagonal
     min_component_px: int = 30
     min_largest_frac: float = 0.9
     border_margin: int = 2
     # DINO (only used when an embedder is given)
-    dino_review: float = 0.55
+    dino_review: float = 0.6
     dino_lost: float = 0.35
-    dino_every: int = 5  # compute every k-th frame of a segment, plus on suspicious frames
+    dino_every: int = 3  # compute every k-th frame of a segment, plus on suspicious frames
     # grouping
     merge_gap: int = 3
     min_issue_frames: int = 1
+
+    @classmethod
+    def geometry_only(cls, **kw) -> "HealthConfig":
+        """Best no-DINO setting from the WP3 sweep: catches occlusion through a keyframe-area
+        drop (kf_area_min 0.3), at the cost of long low-precision issues on far-away stretches."""
+        return cls(**{"kf_area_min": 0.3, **kw})
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -114,7 +139,7 @@ class Issue:
     start: int
     end: int
     worst_frame: int
-    kind: str  # lost | scope | jump | fragment | drift
+    kind: str  # lost | exit | scope | jump | fragment | drift
     n_frames: int
     n_lost: int
     reasons: dict = field(default_factory=dict)  # reason -> frame count
@@ -232,6 +257,7 @@ def assess_track(masks: Mapping[int, np.ndarray], keyframes: Mapping[int, Option
         kg = geom(k)
         trend = 1.0
         since_dino = cfg.dino_every
+        window: list[int] = [kg.area] if kg.area else []
         for f in fs:
             g = geom(f)
             prev = f - step
@@ -248,8 +274,20 @@ def assess_track(masks: Mapping[int, np.ndarray], keyframes: Mapping[int, Option
                 s["touches_border"] = border
                 s["n_components"] = g.n_components
                 s["largest_frac"] = g.largest_frac
+                if window:
+                    wr = g.area / float(np.median(window[-cfg.area_window:]))
+                    s["win_area"] = wr
+                    if wr < cfg.win_area_min and not border:
+                        reasons.append("win_shrink")
+                        sev += _excess(cfg.win_area_min / wr)
+                    elif wr > cfg.win_area_max:
+                        reasons.append("win_grow")
+                        sev += _excess(wr / cfg.win_area_max)
                 if kg.area:
                     r = g.area / kg.area
+                    if border and r < cfg.edge_kf_area:
+                        reasons.append("edge")
+                        sev += 1.0 + _excess(cfg.edge_kf_area / r)
                     s["kf_area"] = r
                     s["aspect_log"] = abs(math.log(g.aspect / kg.aspect))
                     s["fill_ratio"] = g.fill / kg.fill if kg.fill else 1.0
@@ -304,6 +342,8 @@ def assess_track(masks: Mapping[int, np.ndarray], keyframes: Mapping[int, Option
                         elif sim < cfg.dino_review:
                             reasons.append("dino_low")
                             sev += (cfg.dino_review - sim) * 10
+            if g.area:
+                window.append(g.area)
             lost = any(REASON_KIND[r] == "lost" for r in reasons)
             status = LOST if lost else REVIEW if reasons else OK
             out[f] = FrameHealth(f, status, reasons, sev, s)
@@ -386,7 +426,7 @@ def assess(engine, track_id: Hashable, config: Optional[HealthConfig] = None,
     return health, group_issues(health, track_id, config)
 
 
-CSV_FIELDS = ["frame", "status", "severity", "reasons", "origin", "area", "empty_run", "kf_area", "step_area",
+CSV_FIELDS = ["frame", "status", "severity", "reasons", "origin", "area", "empty_run", "kf_area", "win_area", "step_area",
               "step_rel", "trend", "jump", "n_components", "largest_frac", "aspect_log", "fill_ratio",
               "touches_border", "dino_sim"]
 
