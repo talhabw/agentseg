@@ -367,9 +367,12 @@ async def segment(request: SegmentRequest):
 
     # Load image
     image_rgb, width, height = _load_image(request.image_id)
+    image_record = get_store().get_image_by_id(request.image_id)
 
     # Set image for segmentation
-    segment_service.set_image(image_rgb, str(request.image_id))
+    # sam_server consumes the source path; the local backend keeps using the
+    # ndarray cache and accepts the same identifier.
+    segment_service.set_image(image_rgb, image_record.path if image_record else str(request.image_id))
 
     # Convert points format
     pos_points = None

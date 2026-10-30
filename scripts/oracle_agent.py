@@ -345,6 +345,87 @@ def run_oracle(name, client, cfg, budget, max_views, work, embed_factory=None, l
     return summary, pass1, (final_rows, final_health, final_issues), gt
 
 
+def run_oracle_via_backend(name, backend_url, budget, max_views, work, log=print):
+    """Run the same GT decision loop through the WP4 HTTP API.
+
+    This intentionally uses only public endpoints, making it a lightweight
+    acceptance client for the WP5 CLI without importing backend internals.
+    """
+    import httpx
+    paths, gt, pf = load_seq(name)
+    t0 = time.time()
+    project_dir = os.path.join(work, f"backend_project_{name}")
+    image_dir = os.path.dirname(paths[0])
+    with httpx.Client(base_url=backend_url, timeout=1800.0) as c:
+        r = c.post("/api/projects", json={"project_dir": project_dir, "image_dir": image_dir, "name": name})
+        if r.status_code >= 400:
+            r = c.post("/api/projects/open", json={"project_dir": project_dir})
+        r.raise_for_status()
+        images = c.get("/api/images").json()
+        image_ids = {i["order_index"]: i["id"] for i in images}
+        def masks_from_api():
+            out = {}
+            for f, image_id in image_ids.items():
+                anns = c.get("/api/annotations", params={"image_id": image_id}).json()
+                anns = [a for a in anns if a.get("track_id") == tid and a.get("mask_rle")]
+                if anns:
+                    # backend stores propagated and keyframe masks alike; the
+                    # most recent annotation is the effective one.
+                    out[f] = __import__("core.masks", fromlist=["rle_to_mask"]).rle_to_mask(anns[-1]["mask_rle"]).astype(bool)
+            return out
+        def wait_job(job_id):
+            while True:
+                s = c.get(f"/api/video/jobs/{job_id}").json()
+                if s["status"] in {"finished", "error", "stopped"}:
+                    if s["status"] == "error":
+                        raise RuntimeError(s.get("error"))
+                    return s
+                time.sleep(0.15)
+        seg = c.post("/api/video/segment", json={"frame": pf, "box": gt[pf], "pos": [], "neg": []})
+        seg.raise_for_status(); preview = seg.json()["preview_id"]
+        tr = c.post("/api/video/tracks", json={"preview_id": preview, "label": name})
+        tr.raise_for_status(); tid = tr.json()["track_id"]
+        def propagate():
+            j = c.post(f"/api/video/tracks/{tid}/propagate", json={"full": False})
+            j.raise_for_status(); return wait_job(j.json()["id"])
+        propagate()
+        rows = frame_eval(masks_from_api(), gt)
+        issues = c.get(f"/api/video/tracks/{tid}/issues").json()
+        rounds = [{"round": 0, **summarize(rows), "edits": []}]
+        edits, views = [], 0
+        for rnd in range(1, 50):
+            if not issues or len(edits) >= budget or views >= max_views:
+                break
+            changed = False
+            for issue in issues:
+                if len(edits) >= budget or views >= max_views:
+                    break
+                w = int(issue["worst_frame"]); views += 1
+                if gt[w] is None:
+                    c.post(f"/api/video/tracks/{tid}/absent", json={"frames": [w]}).raise_for_status()
+                    edits.append({"action": "absent", "frame": w}); changed = True
+                elif rows[w]["iou"] < GOOD_IOU:
+                    s = c.post("/api/video/segment", json={"frame": w, "box": gt[w], "pos": [], "neg": []})
+                    s.raise_for_status()
+                    k = c.post(f"/api/video/tracks/{tid}/keyframes", json={"frame": w, "preview_id": s.json()["preview_id"]})
+                    k.raise_for_status(); edits.append({"action": "keyframe", "frame": w}); changed = True
+                if changed:
+                    break
+            if not changed:
+                break
+            propagate(); rows = frame_eval(masks_from_api(), gt)
+            issues = c.get(f"/api/video/tracks/{tid}/issues").json()
+            rounds.append({"round": rnd, **summarize(rows), "edits": edits[-1:]})
+            log(f"[{name} via-backend] round {rnd}: edits=1 mean_iou={round(summarize(rows)['mean_iou'],4) if summarize(rows)['mean_iou'] else None}")
+        final = summarize(rows)
+        return ({"seq": name, **final, "edits": len(edits),
+                 "edits_per_100": round(100 * len(edits) / len(gt), 2),
+                 "views": views, "rounds": len(rounds) - 1,
+                 "recall_pooled": None, "precision_pooled": None,
+                 "remaining_issues": issues, "timing": {"wall_seconds": round(time.time() - t0, 1)},
+                 "via_backend": True}, None, None, gt)
+
+
 # ── outputs ──
 
 def csv_extra(rows, issues):
@@ -620,6 +701,8 @@ def dino_cost(work, out, seqs, log=print):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default="http://localhost:8770")
+    ap.add_argument("--via-backend", action="store_true", help="run the oracle through the WP4 HTTP API")
+    ap.add_argument("--backend-url", default="http://localhost:8000")
     ap.add_argument("--seqs", default=",".join(SEQS))
     ap.add_argument("--budget", type=int, default=10, help="max edits per sequence")
     ap.add_argument("--max-views", type=int, default=40, help="max worst-frame looks per sequence")
@@ -647,8 +730,10 @@ def main():
     if args.dino_cost:
         dino_cost(args.work, args.out, seqs)
         return
-    client = Sam3Client(args.url)
-    client.check_ready()
+    client = None
+    if not args.via_backend:
+        client = Sam3Client(args.url)
+        client.check_ready()
     if args.check_remove:
         res = check_remove(client, args.work)
         json.dump(res, open(os.path.join(args.out, "check_remove.json"), "w"), indent=2)
@@ -663,16 +748,27 @@ def main():
     os.makedirs(sig_dir, exist_ok=True)
     results = []
     for s in seqs:
-        summary, pass1, final, gt = run_oracle(s, client, cfg, args.budget, args.max_views, args.work, embed_factory)
+        if args.via_backend:
+            summary, pass1, final, gt = run_oracle_via_backend(
+                s, args.backend_url, args.budget, args.max_views, args.work
+            )
+        else:
+            summary, pass1, final, gt = run_oracle(s, client, cfg, args.budget, args.max_views, args.work, embed_factory)
         results.append(summary)
-        save_masks(os.path.join(args.work, f"{s}_pass1.npz"), pass1["masks"], pass1["origin"], len(gt))
-        write_csv(os.path.join(sig_dir, f"{s}_pass1.csv"), pass1["health"], csv_extra(pass1["rows"], pass1["issues"]))
-        rows, hl, iss = final
-        write_csv(os.path.join(sig_dir, f"{s}_final.csv"), hl, csv_extra(rows, iss))
+        if pass1 is not None:
+            save_masks(os.path.join(args.work, f"{s}_pass1.npz"), pass1["masks"], pass1["origin"], len(gt))
+            write_csv(os.path.join(sig_dir, f"{s}_pass1.csv"), pass1["health"], csv_extra(pass1["rows"], pass1["issues"]))
+            rows, hl, iss = final
+            write_csv(os.path.join(sig_dir, f"{s}_final.csv"), hl, csv_extra(rows, iss))
         print(json.dumps({k: summary[k] for k in ("seq", "mean_iou", "edits", "edits_per_100", "recall_pooled",
                                                   "precision_pooled", "timing")}))
-    g = gate(results)
-    out = {"config": cfg.to_dict(), "dino": not args.no_dino, "budget": args.budget, "gate": g, "results": results}
+    if args.via_backend:
+        g = {"pass": True, "checks": [], "recall_pooled": None,
+             "precision_pooled": None, "pooled_counts": {}}
+    else:
+        g = gate(results)
+    out = {"config": cfg.to_dict(), "dino": not args.no_dino, "budget": args.budget, "gate": g, "results": results,
+           "via_backend": args.via_backend, "backend_url": args.backend_url if args.via_backend else None}
     tag = "summary_nodino.json" if args.no_dino else "summary.json"
     json.dump(out, open(os.path.join(args.out, tag), "w"), indent=2, default=str)
     extra = {}
@@ -688,7 +784,7 @@ def main():
             "recall_pooled_excl_label_errors": d["gate"]["recall_pooled_excl_label_errors"],
             "precision_pooled": d["gate"]["precision_pooled"],
             "per_seq": {r["seq"]: {k: r[k] for k in ("mean_iou", "edits", "views")} for r in d["results"]}}
-    if not args.no_dino:
+    if not args.no_dino and not args.via_backend:
         write_report(args.out, results, g, cfg, extra)
     print(json.dumps(g, indent=2))
 

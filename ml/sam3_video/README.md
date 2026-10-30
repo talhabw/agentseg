@@ -61,3 +61,20 @@ frame plus every suspicious frame.
 
 Tests: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/python -m pytest tests/test_sam3_video_*.py`
 (fake sam_server in `tests/fake_sam3.py`, reusable for WP4 API tests).
+
+## Backend video API (WP4)
+
+Start the backend with `PYTHONPATH=. .venv/bin/python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000` and keep `sam_server --models sam3,image` at `SAM_SERVER_URL` (default `http://localhost:8770`). The backend keeps one `TrackEngine` session per open project.
+
+All routes below are under `/api/video` and use the currently open project. Errors use FastAPI's JSON shape `{ "detail": "..." }`.
+
+* `POST /segment` `{ "frame": 0, "box": [x0,y0,x1,y1], "pos": [[x,y]], "neg": [] }` returns `{ "preview_id": "...", "frame": 0, "bbox": [...], "area": 1234, "score": 0.9 }`. A preview is server-side and expires after 30 minutes.
+* `POST /tracks` `{ "preview_id": "...", "label": "torpedo" }` returns `{ "track_id": 1, "keyframe": {"frame": 0, "annotation_id": 4, "bbox": [...], "area": 1234}, "label_id": 1 }`.
+* `POST /tracks/{id}/propagate` `{ "full": false, "start": 0, "end": 525 }` returns a job snapshot `{ "id": "...", "status": "pending", "track_id": 1, ... }`.
+* `GET /jobs/{job_id}` and `GET /jobs/{job_id}/events?after=0&wait=15` provide status and polling events (`started`, `frame`, `issue`, `finished`, `error`).
+* `GET /tracks/{id}/issues` returns persisted health issues; `GET /tracks` returns keyframes, absent frames, coverage, issue count, and latest job state.
+* `POST /tracks/{id}/keyframes` accepts `{ "frame": 20, "preview_id": "..." }` or `{ "frame": 20, "box": [...] , "pos": [], "neg": [] }`; `DELETE /tracks/{id}/keyframes/{frame}` removes an anchor and regenerates on the next propagate.
+* `POST /tracks/{id}/absent` accepts `{ "frames": [120,121] }` or `{ "start": 120, "end": 139 }`.
+* `GET /render/frame?frame=20&track_id=1&grid=true` and `GET /render/sheet?track_id=1&every=10` return PNG overlays. A 50 px coordinate grid can be requested for frame renders.
+
+The existing `/api/ml/segment` remains available and uses the same sam_server image head by default. Set `SAM_SEGMENT_BACKEND=local` and call `/api/ml/sam/load` to opt into the previous in-process SAM loader.

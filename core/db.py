@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Optional
 
 # Current schema version
+# Keep the public schema version at 2 for compatibility with existing project
+# databases; the v3 tables are additive and are created idempotently below.
 SCHEMA_VERSION = 2
 
 
@@ -110,6 +112,36 @@ def init_db(db_path: str) -> None:
 
         # Object identity (v2): tracks + annotations.track_id
         _create_tracks_schema(cursor)
+
+        # Video tracking metadata (v3).  Absent frames are explicit engine
+        # conditioning state and issues are durable job diagnostics.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS track_absences (
+                track_id INTEGER NOT NULL,
+                frame INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (track_id, frame),
+                FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS issues (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                track_id INTEGER NOT NULL,
+                job_id TEXT,
+                start_frame INTEGER NOT NULL,
+                end_frame INTEGER NOT NULL,
+                worst_frame INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                n_frames INTEGER NOT NULL DEFAULT 0,
+                n_lost INTEGER NOT NULL DEFAULT 0,
+                reasons_json TEXT,
+                signals_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_issues_track ON issues(track_id)")
         
         # Key-value store for settings, last open image, etc.
         cursor.execute("""
@@ -152,20 +184,19 @@ def migrate_db(db_path: str) -> None:
     """
     current_version = get_schema_version(db_path)
     
-    if current_version < SCHEMA_VERSION:
-        # Run migrations
-        conn = get_connection(db_path)
-        try:
-            # Migration 0 -> 1: Initial schema (handled by init_db)
-            if current_version < 1:
-                init_db(db_path)
-            
-            if current_version < 2:
-                _migrate_v1_to_v2(conn)
-
-            conn.commit()
-        finally:
-            conn.close()
+    # Run historical migrations when needed, and always apply the additive
+    # video tables (their CREATE statements are idempotent).
+    conn = get_connection(db_path)
+    try:
+        # Migration 0 -> 1: Initial schema (handled by init_db)
+        if current_version < 1:
+            init_db(db_path)
+        if current_version < 2:
+            _migrate_v1_to_v2(conn)
+        _migrate_v2_to_v3(conn)
+        conn.commit()
+    finally:
+        conn.close()
 
 
 TRACK_STATUSES = ("active", "lost", "ended")
@@ -214,6 +245,38 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
         )
     _create_tracks_schema(conn.cursor())
     conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (2)")
+
+
+def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """v2 -> v3: durable absent-frame and health-issue records."""
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS track_absences (
+            track_id INTEGER NOT NULL,
+            frame INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (track_id, frame),
+            FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS issues (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            track_id INTEGER NOT NULL,
+            job_id TEXT,
+            start_frame INTEGER NOT NULL,
+            end_frame INTEGER NOT NULL,
+            worst_frame INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            n_frames INTEGER NOT NULL DEFAULT 0,
+            n_lost INTEGER NOT NULL DEFAULT 0,
+            reasons_json TEXT,
+            signals_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_issues_track ON issues(track_id)")
 
 
 def _set_kv(conn: sqlite3.Connection, key: str, value: str) -> None:
