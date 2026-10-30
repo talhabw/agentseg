@@ -179,7 +179,7 @@ class VideoTrackJob:
 _PREVIEWS: OrderedDict[str, Preview] = OrderedDict()
 _PREVIEW_LIMIT = int(os.getenv("VIDEO_PREVIEW_LIMIT", "64"))
 _PREVIEW_TTL = float(os.getenv("VIDEO_PREVIEW_TTL", "1800"))
-_ENGINES: dict[int, TrackEngine] = {}
+_ENGINES: dict[str, TrackEngine] = {}
 _ENGINE_LOCK = threading.RLock()
 _JOBS: dict[str, VideoTrackJob] = {}
 _JOBS_LOCK = threading.RLock()
@@ -192,7 +192,8 @@ def _client() -> Sam3Client:
 def _engine() -> TrackEngine:
     project, store = get_project(), get_store()
     with _ENGINE_LOCK:
-        eng = _ENGINES.get(project.id)
+        key = project.db_path
+        eng = _ENGINES.get(key)
         if eng is not None and eng.num_frames == store.get_image_count(project.id):
             return eng
         if eng is not None:
@@ -200,7 +201,7 @@ def _engine() -> TrackEngine:
         images = store.list_images(project.id)
         frames = FrameSet([i.path for i in images], root=str(Path(project.root_dir) / ".autoseg" / "frames"))
         eng = TrackEngine(_client(), frames)
-        _ENGINES[project.id] = eng
+        _ENGINES[key] = eng
         return eng
 
 
@@ -222,6 +223,16 @@ def _track_loaded(engine: TrackEngine, track_id: int):
     absent = store.list_track_absences(track_id)
     if absent:
         engine.mark_absent(track_id, absent)
+
+
+def _keyframe_dirty_range(engine: TrackEngine, track_id: int, frame: int) -> tuple[int, int]:
+    """Frames owned by a newly inserted keyframe (inclusive)."""
+    t = engine.track(track_id)
+    positives = sorted(t.positive_keyframes())
+    pos = positives.index(frame) if frame in positives else 0
+    lo = ((positives[pos - 1] + frame) // 2 + 1) if pos else 0
+    hi = ((frame + positives[pos + 1]) // 2) if pos + 1 < len(positives) else engine.num_frames - 1
+    return lo, hi
 
 
 def _get_preview(pid: str) -> Preview:
@@ -316,6 +327,7 @@ def create_video_track(req: CreateTrackRequest):
     if track.id not in eng.tracks:
         eng.add_track(track.id)
     eng.add_keyframe(track.id, p.frame, p.mask, source="sam")
+    eng._video_dirty_range = (0, eng.num_frames - 1)
     return {"track_id": track.id, "keyframe": {"frame": p.frame, "annotation_id": ann.id,
             "bbox": p.bbox, "area": mask_area(p.mask)}, "label_id": label.id}
 
@@ -331,13 +343,15 @@ def start_propagate(track_id: int, req: PropagateRequest = PropagateRequest()):
         eng = _engine(); _track_loaded(eng, track_id)
         if not eng.track(track_id).positive_keyframes():
             raise HTTPException(400, "Track has no keyframes")
-        lo = req.start if req.start is not None else 0
-        hi = req.end if req.end is not None else eng.num_frames - 1
+        dirty = getattr(eng, "_video_dirty_range", None)
+        lo = req.start if req.start is not None else (0 if req.full or dirty is None else dirty[0])
+        hi = req.end if req.end is not None else (eng.num_frames - 1 if req.full or dirty is None else dirty[1])
         if lo < 0 or hi >= eng.num_frames or lo > hi:
             raise HTTPException(400, "Invalid frame range")
         job = VideoTrackJob(project.id, track_id, eng, store.db_path,
                             frame_range=(lo, hi), full=req.full)
         _JOBS[job.id] = job
+        eng._video_dirty_range = None
         job.start()
     return job.snapshot()
 
@@ -399,6 +413,7 @@ def add_video_keyframe(track_id: int, req: KeyframeRequest):
                                   confidence=float(score), mask_rle=mask_to_rle(mask),
                                   polygon_norm=mask_to_yolo_polygon(mask, image.width, image.height), track_id=track_id)
     eng.add_keyframe(track_id, req.frame, mask, source="sam")
+    eng._video_dirty_range = _keyframe_dirty_range(eng, track_id, req.frame)
     return {"track_id": track_id, "frame": req.frame, "annotation_id": ann.id, "score": float(score),
             "bbox": mask_to_bbox(mask)}
 
@@ -409,6 +424,7 @@ def remove_video_keyframe(track_id: int, frame: int):
     if frame not in eng.track(track_id).keyframes:
         raise HTTPException(404, "Keyframe not found")
     eng.remove_keyframe(track_id, frame)
+    eng._video_dirty_range = (0, eng.num_frames - 1)
     store = get_store()
     for ann, img in store.list_track_annotations(track_id):
         if img.order_index == frame and ann.source != "propagated":
@@ -428,6 +444,7 @@ def mark_track_absent(track_id: int, req: AbsentRequest):
         raise HTTPException(400, str(exc))
     store = get_store(); store.add_track_absences(track_id, frames)
     store.delete_propagated_annotations(track_id, min(frames), max(frames))
+    eng._video_dirty_range = (min(frames), max(frames))
     return {"track_id": track_id, "frames": sorted(set(frames)), "status": "absent"}
 
 

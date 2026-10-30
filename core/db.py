@@ -14,7 +14,10 @@ SCHEMA_VERSION = 2
 
 def get_connection(db_path: str) -> sqlite3.Connection:
     """Get a database connection with row factory enabled."""
-    conn = sqlite3.connect(db_path)
+    # FastAPI executes sync handlers in a worker pool and background jobs in
+    # their own threads; ProjectStore connections are protected by the store
+    # lock at the API layer and must therefore be usable across those threads.
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
