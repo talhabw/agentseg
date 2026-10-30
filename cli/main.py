@@ -17,13 +17,36 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import httpx
 
 REPO = Path(__file__).resolve().parents[1]
 HOME = Path(os.getenv("AUTOSEG_HOME", ".autoseg"))
-BACKEND = os.getenv("AUTOSEG_BACKEND", "http://localhost:8000")
+
+
+def _default_backend() -> str:
+    """Use the UI backend when it is already running.
+
+    The web UI is configured to proxy to port 5172, while standalone CLI
+    sessions historically used port 8000.  Prefer the UI backend so CLI
+    commands operate on the same in-memory current project; retain 8000 as a
+    fallback for standalone use.
+    """
+    configured = os.getenv("AUTOSEG_BACKEND")
+    if configured:
+        return configured
+    for candidate in ("http://localhost:5172", "http://localhost:8000"):
+        try:
+            if httpx.get(f"{candidate}/api/health", timeout=0.5).status_code < 400:
+                return candidate
+        except httpx.HTTPError:
+            continue
+    return "http://localhost:5172"
+
+
+BACKEND = _default_backend()
 SAM_URL = os.getenv("SAM_SERVER_URL", "http://localhost:8770")
 
 
@@ -36,11 +59,22 @@ class CliError(Exception):
 # ---------------------------------------------------------------- HTTP helpers
 
 class Api:
-    def __init__(self, base: str):
+    def __init__(self, base: str, run_id: str | None = None, command: str | None = None):
         self.base = base.rstrip("/")
         self.http = httpx.Client(base_url=self.base, timeout=600.0)
+        self.run_id = run_id
+        self.command = command
 
     def _call(self, method: str, path: str, **kw):
+        headers = dict(kw.pop("headers", {}) or {})
+        run_id = getattr(self, "run_id", None)
+        command = getattr(self, "command", None)
+        if run_id:
+            headers.update({"X-AutoSeg-Run-ID": run_id, "X-AutoSeg-Source": "cli"})
+            if command:
+                headers["X-AutoSeg-Command"] = command[:240]
+        if headers:
+            kw["headers"] = headers
         try:
             r = self.http.request(method, path, **kw)
         except httpx.TransportError as exc:
@@ -67,6 +101,48 @@ class Api:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(r.content)
         return out.resolve()
+
+    def activity(self, event_type: str, *, action: str | None = None,
+                 status: str | None = None, message: str | None = None,
+                 **data):
+        """Best-effort publish; observability must never break a CLI command."""
+        try:
+            return self.post("/api/activity/events", {
+                "type": event_type, "source": "cli", "action": action,
+                "status": status, "run_id": self.run_id, "message": message,
+                "data": {k: v for k, v in data.items() if v is not None},
+            })
+        except (CliError, httpx.HTTPError):
+            return None
+
+    def artifact(self, path: Path, *, kind: str, **metadata):
+        try:
+            return self.post("/api/activity/artifacts", {
+                "path": str(path), "kind": kind, "mime_type": "image/png",
+                "metadata": metadata,
+            })
+        except (CliError, httpx.HTTPError):
+            return None
+
+
+def _activity(api, *args, **kwargs):
+    fn = getattr(api, "activity", None)
+    if not fn:
+        return None
+    try:
+        return fn(*args, **kwargs)
+    except (AttributeError, TypeError, CliError, httpx.HTTPError):
+        return None
+
+
+def _artifact(api, *args, **kwargs):
+    fn = getattr(api, "artifact", None)
+    if not fn:
+        return None
+    try:
+        return fn(*args, **kwargs)
+    except (AttributeError, TypeError, CliError, httpx.HTTPError):
+        return None
 
 
 def _alive(url: str) -> bool:
@@ -229,6 +305,8 @@ def _views() -> Path:
 
 
 def cmd_view(api: Api, a) -> dict:
+    _activity(api, "frame.started", action="inspect_frame", status="running",
+                  frame=a.frame, track_id=a.track, message=f"Inspecting frame {a.frame + 1}")
     params = {"frame": a.frame, "grid": a.grid}
     name = f"frame_{a.frame:05d}"
     if a.track is not None:
@@ -238,7 +316,11 @@ def cmd_view(api: Api, a) -> dict:
     if a.grid:
         name += "_grid"
     path = api.png("/api/video/render/frame", params, Path(a.out or _views()) / f"{name}.png")
+    artifact = _artifact(api, path, kind="frame_overlay", frame=a.frame, track_id=a.track)
+    _activity(api, "artifact.created", action="inspect_frame", status="completed", frame=a.frame,
+                  track_id=a.track, artifact=artifact, message=f"Frame {a.frame + 1} is ready to inspect")
     return {"frame": a.frame, "image": str(path),
+            **({"artifact": artifact} if artifact else {}),
             "legend": "track masks tinted, yellow box = keyframe, cyan box = propagated, "
                       "yellow fill = preview; grid lines every 50 px labelled in pixels"}
 
@@ -256,7 +338,12 @@ def cmd_sheet(api: Api, a) -> dict:
     if a.track is not None:
         params["track_id"] = a.track; tag = f"t{a.track}_{tag}"
     path = api.png("/api/video/render/sheet", params, Path(a.out or _views()) / f"sheet_{tag}.png")
+    artifact = _artifact(api, path, kind="contact_sheet", track_id=a.track, frames=frames)
+    _activity(api, "artifact.created", action="inspect_sequence", status="completed", track_id=a.track,
+                  artifact=artifact, message=f"Contact sheet ready ({len(frames)} frames)")
     out = {"image": str(path), "frames": frames}
+    if artifact:
+        out["artifact"] = artifact
     if a.track is not None:
         out["legend"] = ("thumbnail border: yellow=keyframe, green=ok, orange=review (health flagged), "
                          "grey=absent, red=no mask")
@@ -264,12 +351,23 @@ def cmd_sheet(api: Api, a) -> dict:
 
 
 def cmd_segment(api: Api, a) -> dict:
-    body = {"frame": a.frame, "box": _box(a.box), "pos": _points(a.pos), "neg": _points(a.neg)}
+    box = _box(a.box)
+    _activity(api, "segment.started", action="segment", status="running", frame=a.frame,
+                  bbox=box,
+                  message=f"Creating a mask proposal on frame {a.frame + 1}")
+    body = {"frame": a.frame, "box": box, "pos": _points(a.pos), "neg": _points(a.neg)}
     res = api.post("/api/video/segment", body)
     params = {"frame": a.frame, "preview_id": res["preview_id"], "grid": not a.no_grid}
     path = api.png("/api/video/render/frame", params,
                    Path(a.out or _views()) / f"preview_{a.frame:05d}_{res['preview_id']}.png")
+    artifact = _artifact(api, path, kind="mask_preview", frame=a.frame, preview_id=res["preview_id"])
+    _activity(api, "mask.proposed", action="segment", status="completed", frame=a.frame,
+                  preview_id=res["preview_id"], bbox=res.get("bbox"), score=res.get("score"),
+                  render_url=(f"/api/video/render/frame?frame={a.frame}"
+                              f"&preview_id={res['preview_id']}"),
+                  artifact=artifact, message="Mask proposal is ready for inspection")
     return {**res, "image": str(path),
+            **({"artifact": artifact} if artifact else {}),
             "next": "look at the image; if the yellow mask is right use the preview_id with "
                     "`track create` or `track refine --preview`, otherwise re-run segment with "
                     "a better --box and/or --pos/--neg points"}
@@ -300,11 +398,17 @@ def _get_track(api: Api, tid: int) -> dict:
 
 
 def cmd_track_create(api: Api, a) -> dict:
+    _activity(api, "track.started", action="create_track", status="running",
+                  message=f"Creating track for {a.label}")
     res = api.post("/api/video/tracks", {"preview_id": a.preview, "label": a.label, "name": a.name})
+    _activity(api, "track.created", action="create_track", status="completed", track_id=res.get("track_id"),
+                  frame=(res.get("keyframe") or {}).get("frame"), message=f"Track {res.get('track_id')} created")
     return {**res, "next": f"run `autoseg track propagate {res['track_id']}`"}
 
 
 def _propagate(api: Api, tid: int, full=False, start=None, end=None, wait=True) -> dict:
+    _activity(api, "track.started", action="propagate", status="running", track_id=tid,
+                  message=f"Propagating track {tid}")
     body = {"full": full}
     if start is not None: body["start"] = start
     if end is not None: body["end"] = end
@@ -320,6 +424,12 @@ def _propagate(api: Api, tid: int, full=False, start=None, end=None, wait=True) 
             seq = max(seq, ev["seq"])
             if ev["type"] == "frame":
                 frames += 1
+                if frames == 1 or frames == total or ev.get("render_url"):
+                    _activity(api, "track.progress", action="propagate", status="running", track_id=tid,
+                              frame=ev.get("frame"), bbox=ev.get("bbox"),
+                              visible=ev.get("visible", True), render_url=ev.get("render_url"),
+                              progress={"done": frames, "total": total},
+                              message=f"Propagating track {tid}: frame {int(ev.get('frame', 0)) + 1}")
                 if frames % 50 == 0:
                     print(f"  propagated {frames}/{total} frames ({time.time() - t0:.0f}s)", file=sys.stderr)
             elif ev["type"] == "error":
@@ -330,6 +440,9 @@ def _propagate(api: Api, tid: int, full=False, start=None, end=None, wait=True) 
     if job["status"] != "finished":
         raise CliError(f"propagation ended with status {job['status']}: {job.get('error')}")
     issues = [_compact_issue(i) for i in api.get(f"/api/video/tracks/{tid}/issues")]
+    _activity(api, "track.finished", action="propagate", status="completed", track_id=tid,
+                  progress={"done": job["counts"]["frames"], "total": total},
+                  issues=issues, message=f"Track {tid} propagation finished")
     return {"track_id": tid, "frame_range": [lo, hi], "frames_written": job["counts"]["frames"],
             "seconds": round(time.time() - t0, 1), "issues": issues,
             "next": ("no issues: check `autoseg sheet --track %d` then export" % tid) if not issues else
@@ -342,10 +455,14 @@ def cmd_track_propagate(api: Api, a) -> dict:
 
 def cmd_track_issues(api: Api, a) -> dict:
     raw = api.get(f"/api/video/tracks/{a.track}/issues")
+    _activity(api, "issue.review", action="review_issues", status="completed", track_id=a.track,
+                  count=len(raw), message=f"Reviewed {len(raw)} issue(s) for track {a.track}")
     return {"track_id": a.track, "issues": raw if a.verbose else [_compact_issue(i) for i in raw]}
 
 
 def cmd_track_refine(api: Api, a) -> dict:
+    _activity(api, "mask.refine_started", action="refine", status="running", track_id=a.track,
+                  frame=a.frame, message=f"Refining track {a.track} on frame {a.frame + 1}")
     body = {"frame": a.frame}
     if a.preview:
         body["preview_id"] = a.preview
@@ -374,6 +491,8 @@ def cmd_track_keyframes(api: Api, a) -> dict:
 def cmd_track_absent(api: Api, a) -> dict:
     frames = _frames(a.frames)
     res = api.post(f"/api/video/tracks/{a.track}/absent", {"frames": frames})
+    _activity(api, "track.absent", action="mark_absent", status="completed", track_id=a.track,
+                  frames=frames, message=f"Marked {len(frames)} frame(s) as absent")
     out = {"track_id": a.track, "absent": _ranges(res["frames"])}
     if not a.no_propagate:
         out["propagate"] = _propagate(api, a.track)
@@ -395,6 +514,8 @@ def cmd_export(api: Api, a) -> dict:
         res = api.post("/api/export/yolo", common)
     else:
         res = api.post("/api/export/bbox", {**common, "format": a.format})
+    _activity(api, "export.completed", action="export", status="completed", format=a.format,
+                  output_dir=str(out_dir), message=f"Exported {a.format} labels")
     return {"format": a.format, "output_dir": str(out_dir), **res}
 
 
@@ -520,15 +641,26 @@ def main(argv=None) -> int:
         _log(argv, e.code, time.time() - t0)
         raise
     code = 0
+    run_id = uuid.uuid4().hex[:12]
+    command = "autoseg " + " ".join(argv)
+    api = Api(a.backend)
+    # Keep compatibility with lightweight Api doubles used by integrations and
+    # tests while real Api instances retain correlation metadata.
+    if hasattr(api, "run_id"):
+        api.run_id, api.command = run_id, command
+    _activity(api, "command.started", action=a.cmd, status="running", message=f"Started {command}")
     try:
-        result = a.fn(Api(a.backend), a)
+        result = a.fn(api, a)
         print(json.dumps({"ok": True, **result}, indent=1))
+        _activity(api, "command.completed", action=a.cmd, status="completed", message=f"Completed {command}")
     except CliError as e:
         code = e.code
         print(json.dumps({"ok": False, "error": str(e), **e.extra}))
+        _activity(api, "command.failed", action=a.cmd, status="error", message=str(e), error=str(e))
     except KeyboardInterrupt:
         code = 130
         print(json.dumps({"ok": False, "error": "interrupted"}))
+        _activity(api, "command.failed", action=a.cmd, status="error", message="Command interrupted")
     _log(argv, code, time.time() - t0)
     return code
 

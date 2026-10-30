@@ -23,6 +23,7 @@ from PIL import Image, ImageDraw
 from pydantic import BaseModel, Field
 
 from backend.api.projects import get_project, get_store
+from backend.api.activity import publish as publish_activity
 from core.masks import mask_area, mask_to_bbox, mask_to_rle, rle_to_mask
 from core.polygons import mask_to_yolo_polygon
 from ml.sam3_video import FrameSet, Sam3Client, TrackEngine
@@ -77,6 +78,24 @@ class VideoTrackJob:
                   "ts": time.time(), **data}
             self._events.append(ev)
             self._cond.notify_all()
+        # Mirror video-job events into the shared activity feed so browser
+        # sessions can observe work started by either the CLI or the editor.
+        # A frame event is also the visual hand-off to the editor.  Keep every
+        # frame in the activity stream so the canvas can paint masks as soon as
+        # SAM produces them.  The payload stays compact (bbox + render URL),
+        # while the native job endpoint remains available for detailed polling.
+        should_publish = True
+        if should_publish:
+            try:
+                publish_activity(
+                    f"video_job.{typ}", source="backend", action="propagate",
+                    status=("running" if typ not in {"finished", "stopped", "error"} else
+                            ("error" if typ == "error" else "completed")),
+                    run_id=self.id, project_id=self.project_id, track_id=self.track_id,
+                    **data,
+                )
+            except Exception:
+                pass
         return ev
 
     def events_after(self, after=0):
@@ -129,6 +148,8 @@ class VideoTrackJob:
                         return
                     m = np.asarray(ev.mask, dtype=bool)
                     if not m.any():  # tracker says "not here": no annotation, export writes nothing
+                        self.emit("frame", frame=frame, visible=False,
+                                  progress=self.counts["frames"])
                         return
                     ann = store.create_annotation(
                         image.id, track.label_id, mask_to_bbox(m), source="propagated",
@@ -138,6 +159,9 @@ class VideoTrackJob:
                     )
                     self.counts["frames"] += 1
                     self.emit("frame", frame=frame, annotation_id=ann.id,
+                              bbox=mask_to_bbox(m), visible=True,
+                              render_url=(f"/api/video/render/frame?frame={frame}"
+                                          f"&track_id={self.track_id}"),
                               progress=self.counts["frames"])
                 elif ev.kind in {"start", "segment"}:
                     self.emit(ev.kind, frame=getattr(ev, "frame", None),
@@ -355,6 +379,15 @@ def segment_preview(req: SegmentRequest):
     _PREVIEWS[p.id] = p
     while len(_PREVIEWS) > _PREVIEW_LIMIT:
         _PREVIEWS.popitem(last=False)
+    try:
+        publish_activity("mask.proposed", source="backend", action="segment", status="completed",
+                         project_id=p.project_id, frame=p.frame, preview_id=p.id,
+                         bbox=p.bbox, score=p.score,
+                         render_url=(f"/api/video/render/frame?frame={p.frame}"
+                                     f"&preview_id={p.id}"),
+                         message="Mask proposal is ready")
+    except Exception:
+        pass
     return {"preview_id": p.id, "frame": p.frame, "bbox": p.bbox,
             "area": mask_area(p.mask), "score": p.score}
 
@@ -380,6 +413,12 @@ def create_video_track(req: CreateTrackRequest):
         eng.add_track(track.id)
     eng.add_keyframe(track.id, p.frame, p.mask, source="sam")
     _mark_dirty(eng, 0, eng.num_frames - 1)
+    try:
+        publish_activity("track.created", source="backend", action="create_track", status="completed",
+                         project_id=project.id, track_id=track.id, frame=p.frame,
+                         message=f"Track {track.id} created")
+    except Exception:
+        pass
     return {"track_id": track.id, "keyframe": {"frame": p.frame, "annotation_id": ann.id,
             "bbox": p.bbox, "area": mask_area(p.mask)}, "label_id": label.id}
 

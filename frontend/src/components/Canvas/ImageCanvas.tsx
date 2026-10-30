@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Stage, Layer, Image as KonvaImage, Rect, Circle, Transformer } from 'react-konva';
+import { Stage, Layer, Image as KonvaImage, Rect, Circle, Line, Transformer } from 'react-konva';
 import Konva from 'konva';
 import { useProjectStore } from '../../stores/projectStore';
 import { useAnnotationStore } from '../../stores/annotationStore';
@@ -24,6 +24,8 @@ export function ImageCanvas() {
   const [drawingBbox, setDrawingBbox] = useState<DrawingBbox | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [isImageLoading, setIsImageLoading] = useState(true);
+  const [agentDrawProgress, setAgentDrawProgress] = useState(0);
+  const [agentMaskImage, setAgentMaskImage] = useState<HTMLImageElement | null>(null);
 
   // Cache for decoded mask canvases (previous ref for cleanup)
   const prevMaskCanvasesRef = useRef<Map<number, HTMLCanvasElement>>(new Map());
@@ -40,9 +42,44 @@ export function ImageCanvas() {
     refinePoints,
     addRefinePoint,
   } = useAnnotationStore();
-  const { mode, maskOpacity, performanceProgress } = useUIStore();
+  const { mode, maskOpacity, performanceProgress, agentActive, agentOverlay } = useUIStore();
 
   const currentImage = images[currentImageIndex];
+  const agentOverlayMatchesCurrent = Boolean(
+    currentImage && agentOverlay &&
+    (agentOverlay.imageId == null || agentOverlay.imageId === currentImage.id) &&
+    (agentOverlay.frame == null || agentOverlay.frame === currentImageIndex)
+  );
+
+  useEffect(() => {
+    if (agentOverlay?.phase !== 'drawing' || !agentOverlay.bbox) {
+      setAgentDrawProgress(0);
+      return;
+    }
+    let raf = 0;
+    const started = performance.now();
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - started) / 720);
+      setAgentDrawProgress(progress);
+      if (progress < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [agentOverlay?.phase, agentOverlay?.bbox?.join(',')]);
+
+  useEffect(() => {
+    const url = agentOverlay?.maskUrl;
+    if (!url) {
+      setAgentMaskImage(null);
+      return;
+    }
+    let cancelled = false;
+    const img = new window.Image();
+    img.onload = () => { if (!cancelled) setAgentMaskImage(img); };
+    img.onerror = () => { if (!cancelled) setAgentMaskImage(null); };
+    img.src = url;
+    return () => { cancelled = true; };
+  }, [agentOverlay?.maskUrl]);
   // Skip heavy rendering when performance propagation is running (no failed image = loop active)
   const isPerformanceLoopActive = performanceProgress !== null && performanceProgress.performance && performanceProgress.failedImageIndex === null;
 
@@ -133,7 +170,6 @@ export function ImageCanvas() {
       }).catch(() => {
         console.error('Failed to load image:', currentImage.id);
         if (!cancelled) {
-          setImage(null);
           setIsImageLoading(false);
         }
       });
@@ -392,7 +428,8 @@ export function ImageCanvas() {
   return (
     <div
       ref={containerRef}
-      className="flex-1 min-w-0 bg-background overflow-hidden cursor-crosshair"
+      className={`agent-canvas-shell flex-1 min-w-0 bg-background overflow-hidden cursor-crosshair ${agentActive ? 'agent-canvas-active' : ''}`}
+      aria-busy={isImageLoading}
       style={{ cursor: mode === 'view' ? 'grab' : mode === 'refine' ? 'crosshair' : 'crosshair' }}
     >
       <Stage
@@ -431,7 +468,7 @@ export function ImageCanvas() {
 
         {/* Mask overlay layer - only show when image is loaded and annotations match current image */}
         <Layer>
-          {!isImageLoading && annotations
+          {annotations
             .filter((ann) => ann.image_id === currentImage?.id)
             .map((ann) => {
               const maskCanvas = maskCanvases.get(ann.id);
@@ -448,12 +485,23 @@ export function ImageCanvas() {
                 />
               );
             })}
+          {agentMaskImage && agentOverlay?.maskUrl && agentOverlayMatchesCurrent && (
+            <KonvaImage
+              image={agentMaskImage}
+              x={0}
+              y={0}
+              width={currentImage.width}
+              height={currentImage.height}
+              opacity={Math.max(0.2, maskOpacity * 0.9)}
+              listening={false}
+            />
+          )}
         </Layer>
 
         {/* Annotations layer (bboxes) - only show when image is loaded and annotations match current image */}
         <Layer>
           {/* Existing annotations */}
-          {!isImageLoading && annotations
+          {annotations
             .filter((ann) => ann.image_id === currentImage?.id)
             .map((ann) => {
               if (!ann.bbox) return null;
@@ -504,6 +552,38 @@ export function ImageCanvas() {
               dash={[5, 5]}
             />
           )}
+
+          {agentOverlay?.bbox && agentOverlayMatchesCurrent && (() => {
+            const [ax1, ay1, ax2, ay2] = agentOverlay.bbox;
+            const width = Math.max(1, ax2 - ax1);
+            const height = Math.max(1, ay2 - ay1);
+            const perimeter = 2 * (width + height);
+            const progress = agentOverlay.phase === 'drawing' ? agentDrawProgress : 1;
+            const distance = perimeter * progress;
+            let cx = ax1;
+            let cy = ay1;
+            if (distance <= width) cx = ax1 + distance;
+            else if (distance <= width + height) { cx = ax2; cy = ay1 + distance - width; }
+            else if (distance <= 2 * width + height) { cx = ax2 - (distance - width - height); cy = ay2; }
+            else { cx = ax1; cy = ay2 - (distance - 2 * width - height); }
+            return (
+              <>
+                <Line
+                  points={[ax1, ay1, ax2, ay1, ax2, ay2, ax1, ay2, ax1, ay1]}
+                  stroke="#63e6be"
+                  strokeWidth={3 / stageScale}
+                  dash={[Math.max(1, distance), perimeter]}
+                  lineCap="round"
+                  lineJoin="round"
+                  opacity={0.95}
+                  listening={false}
+                />
+                {progress < 1 && (
+                  <Circle x={cx} y={cy} radius={5 / stageScale} fill="#f8fffd" stroke="#63e6be" strokeWidth={2 / stageScale} listening={false} />
+                )}
+              </>
+            );
+          })()}
 
           {/* Transformer */}
           <Transformer

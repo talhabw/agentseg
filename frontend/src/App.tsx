@@ -15,6 +15,7 @@ import { useAnnotationStore } from './stores/annotationStore';
 import { useUIStore } from './stores/uiStore';
 import { preloadImage } from './utils/imageCache';
 import { runYoloOnCurrentImage, startAutoYolo, stopAutoYolo } from './utils/yoloRunner';
+import { useAgentActivity, type AgentActivityEvent } from './hooks/useAgentActivity';
 import {
   getTrackingJobId,
   isTrackingJobPaused,
@@ -45,6 +46,50 @@ function AppContent() {
   } = useUIStore();
 
   const currentImage = images[currentImageIndex];
+
+  // The activity stream is the visual bridge between CLI/SAM work and the
+  // canvas. It deliberately stays outside the sidebar: the image itself is
+  // where progress is easiest to understand.
+  const handleAgentEvent = useCallback((event: AgentActivityEvent) => {
+    const ui = useUIStore.getState();
+    const running = event.status === 'running' || event.type.endsWith('.started') || event.type === 'video_job.frame';
+    const finished = event.status === 'error' || event.type.endsWith('.failed') ||
+      event.type.endsWith('.finished') || event.type === 'video_job.finished' || event.type === 'video_job.error';
+    if (running) ui.setAgentActive(true);
+    if (finished) ui.setAgentActive(false);
+
+    const frame = typeof event.frame === 'number' ? event.frame : event.image_index;
+    const imageId = typeof event.image_id === 'number' ? event.image_id : undefined;
+    const bbox = Array.isArray(event.bbox) && event.bbox.length === 4
+      ? event.bbox as [number, number, number, number]
+      : undefined;
+    const renderUrl = typeof event.render_url === 'string' ? event.render_url : undefined;
+    const maskUrl = renderUrl ? `${renderUrl}${renderUrl.includes('?') ? '&' : '?'}agent=1` : undefined;
+
+    if (frame == null && imageId == null && !bbox && !renderUrl) return;
+    const phase = event.type === 'segment.started' ? 'drawing'
+      : event.type === 'mask.proposed' ? 'segmenting'
+      : event.type === 'video_job.frame' || event.type === 'track.progress' ? 'propagating'
+      : undefined;
+    ui.setAgentOverlay({
+      frame,
+      imageId,
+      bbox: bbox ?? null,
+      maskUrl: maskUrl ?? (phase === 'drawing' ? null : undefined),
+      phase: phase ?? 'idle',
+    });
+
+    if (ui.followAgent && (frame != null || imageId != null)) {
+      const target = imageId != null
+        ? images.findIndex((image) => image.id === imageId)
+        : frame;
+      if (target != null && target >= 0 && target < images.length && target !== useProjectStore.getState().currentImageIndex) {
+        useProjectStore.getState().setCurrentImageIndex(target);
+      }
+    }
+  }, [images]);
+
+  useAgentActivity(project?.id, handleAgentEvent);
 
   // On app load: try to reconnect to last project and check model status
   useEffect(() => {

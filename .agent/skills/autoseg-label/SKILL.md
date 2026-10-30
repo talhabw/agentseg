@@ -39,7 +39,21 @@ autoseg sheet                           # ~24 thumbnails across the whole sequen
 prompt frame where the object is **fully visible, large and sharp**, not
 necessarily frame 0. Tracking runs both forward and backward from keyframes.
 
-## 2. First mask
+## 2. Resolve the label before the first mask
+
+Choose the label name before calling `segment` or creating a track. Use the
+object name from the user's request; when it is not explicit, infer a short,
+specific name from the image and state that choice in the run. Never leave the
+label as `unknown`, an empty string, or a placeholder. If there are several
+plausible objects and the choice changes the annotation target, ask the user
+before running SAM. The resolved name is carried into the first `track create`
+call and every later report.
+
+For example, for “label the torpedo” resolve `torpedo`; for “label the board
+in this folder” resolve `board` (or `torpedo_board` when that is the clear
+object identity). Keep it stable for the entire sequence.
+
+## 3. First mask
 
 ```
 autoseg view <f> --grid                          # 50 px labelled grid for reading coordinates
@@ -55,13 +69,13 @@ autoseg segment <f> --box x0,y0,x1,y1            # preview only, nothing saved
 - Iterate until the preview is right, at most 3 tries. Then:
 
 ```
-autoseg track create --label <name> --preview <preview_id>
+autoseg track create --label <resolved_label> --preview <preview_id>
 autoseg track propagate <track_id>               # ~1 min per 500 frames; returns issues
 ```
 
 Use the label name the user gave, or a short descriptive one such as `torpedo_board`.
 
-## 3. Review issues
+## 4. Review issues
 
 `propagate` (and `refine`, `absent`, `keyframes --rm`) return the current
 issue list:
@@ -102,7 +116,7 @@ Rules:
 - Budget: about 10 fixes and about 40 viewed images per sequence. Prefer one
   `sheet` over many `view`s when scanning a range.
 
-## 4. Final check and export
+## 5. Final check and export
 
 ```
 autoseg sheet --track T                 # border colours: yellow keyframe, green ok,
@@ -114,7 +128,7 @@ Look at the final sheet. Orange frames are fine if you inspected them and
 decided to ignore them. Red frames need attention, unless the object is truly
 absent there; then mark them `absent`.
 
-## 5. Report to the user
+## 6. Report to the user
 
 Short:
 - track id and label

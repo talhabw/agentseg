@@ -56,7 +56,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const project = await api.createProject(projectDir, imageDir, name, yoloPreprocess);
-      useAnnotationStore.getState().invalidateAnnotations();
+      useAnnotationStore.getState().resetForProject();
       set({ project, currentImageIndex: 0 });
       await get().loadImages();
       // Save last project path
@@ -74,7 +74,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const project = await api.openProject(projectDir);
-      useAnnotationStore.getState().invalidateAnnotations();
+      useAnnotationStore.getState().resetForProject();
       
       // Try to restore last image index
       let lastIndex = 0;
@@ -110,7 +110,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     try {
       await api.closeProject();
     } finally {
-      useAnnotationStore.getState().invalidateAnnotations();
+      useAnnotationStore.getState().resetForProject();
       set({ project: null, images: [], currentImageIndex: 0, error: null });
     }
   },
@@ -149,6 +149,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   // Try to open last project from localStorage
   tryOpenLastProject: async () => {
+    // The backend's current project is authoritative. This matters when a
+    // project was created by the CLI while the browser still has an older
+    // lastProjectPath persisted locally.
+    try {
+      const current = await api.getCurrentProject();
+      if (current?.root_dir) {
+        await get().openProject(current.root_dir);
+        return true;
+      }
+    } catch {
+      // Fall through to the persisted path when the backend has no project.
+    }
     const lastPath = useUIStore.getState().lastProjectPath;
     if (!lastPath) return false;
     

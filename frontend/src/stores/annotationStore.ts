@@ -20,6 +20,7 @@ interface AnnotationState {
   loadAnnotations: (imageId: number, signal?: AbortSignal) => Promise<void>;
   prefetchAnnotations: (imageIds: number[]) => void;
   invalidateAnnotations: (imageId?: number) => void;
+  resetForProject: () => void;
   loadLabels: () => Promise<void>;
   createAnnotation: (data: {
     image_id: number;
@@ -105,6 +106,12 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
     }
     annotationCache.delete(imageId);
     annotationInflight.delete(imageId);
+  },
+
+  resetForProject: () => {
+    annotationCache.clear();
+    annotationInflight.clear();
+    set({ annotations: [], labels: [], selectedAnnotationId: null, selectedLabelId: null, refinePoints: [], isLoading: false });
   },
 
   loadLabels: async () => {
