@@ -48,3 +48,11 @@ image set_image 170 ms, set_text_prompt 180 ms, predict_inst 440 ms;
 video propagate 200 frames at 9.7 FPS over HTTP, torch peak 15.9 GiB.
 
 Tests: `uv run pytest` (no GPU). Smoke: `uv run python scripts/smoke.py --frames DIR --image IMG`.
+
+## SAM3 video tracking recipe
+
+From this directory, launch the shared SAM3 video and image heads with the low-VRAM batch settings used by the evaluation workflow:
+
+```bash
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run sam-server --port 8770 --models sam3,image --sam3-checkpoint ../models/sam3/sam3.pt --video-model-attrs '{"batched_grounding_batch_size": 4, "postprocess_batch_size": 4}'
+```
