@@ -1,0 +1,330 @@
+{
+  "frames": 526,
+  "frames_with_gt": 526,
+  "mean_iou": 0.4854,
+  "median_iou": 0.4923,
+  "hit_rate": 0.4962,
+  "zero_pred_frames": 0,
+  "fp_total": 0,
+  "frames_with_fp": 0,
+  "max_objects": 1,
+  "id_switches": 0,
+  "first_loss": 0,
+  "name": "F_point1_sam3_pf441_both",
+  "model": "sam3",
+  "prompt": {
+    "kind": "points",
+    "frame_index": 441,
+    "points": [
+      [
+        0.368125,
+        0.510045
+      ]
+    ],
+    "point_labels": [
+      1
+    ],
+    "obj_id": 1,
+    "latency_sec": 0.233,
+    "n_objects_on_prompt_frame": 1
+  },
+  "prompt_frame": 441,
+  "direction": "both",
+  "output_prob_thresh": null,
+  "fps_http": 9.72,
+  "propagate_sec": 574.7,
+  "wall_sec": 576.8,
+  "torch_peak_vram_gib": 11.34,
+  "torch_peak_vram_note": "torch.cuda.max_memory_allocated since server start (not reset per run)",
+  "torch_peak_before_run_gib": 11.2,
+  "box_vs_mask_bbox_max_px": 1.0,
+  "frames_missing": [],
+  "prime": null,
+  "keep_cache": false,
+  "corrections": [
+    {
+      "kind": "points",
+      "frame_index": 0,
+      "points": [
+        [
+          0.264375,
+          0.540179
+        ]
+      ],
+      "point_labels": [
+        1
+      ],
+      "obj_id": 1,
+      "latency_sec": 0.097,
+      "n_objects_on_prompt_frame": 1,
+      "segment_before": {
+        "mean_iou": 0.514,
+        "hit_rate": 0.7034,
+        "first_loss": 0
+      },
+      "segment_after": {
+        "mean_iou": 0.4931,
+        "hit_rate": 0.5589,
+        "first_loss": 0
+      },
+      "frames_repropagated": 526
+    },
+    {
+      "kind": "points",
+      "frame_index": 1,
+      "points": [
+        [
+          0.264375,
+          0.540179
+        ]
+      ],
+      "point_labels": [
+        1
+      ],
+      "obj_id": 1,
+      "latency_sec": 0.189,
+      "n_objects_on_prompt_frame": 1,
+      "segment_before": {
+        "mean_iou": 0.4932,
+        "hit_rate": 0.56,
+        "first_loss": 1
+      },
+      "segment_after": {
+        "mean_iou": 0.4912,
+        "hit_rate": 0.5448,
+        "first_loss": 1
+      },
+      "frames_repropagated": 525
+    },
+    {
+      "kind": "points",
+      "frame_index": 2,
+      "points": [
+        [
+          0.576875,
+          0.561384
+        ]
+      ],
+      "point_labels": [
+        1
+      ],
+      "obj_id": 1,
+      "latency_sec": 0.188,
+      "n_objects_on_prompt_frame": 1,
+      "segment_before": {
+        "mean_iou": 0.4913,
+        "hit_rate": 0.5458,
+        "first_loss": 2
+      },
+      "segment_after": {
+        "mean_iou": 0.496,
+        "hit_rate": 0.5649,
+        "first_loss": 2
+      },
+      "frames_repropagated": 524
+    },
+    {
+      "kind": "points",
+      "frame_index": 3,
+      "points": [
+        [
+          0.576875,
+          0.561384
+        ]
+      ],
+      "point_labels": [
+        1
+      ],
+      "obj_id": 1,
+      "latency_sec": 0.162,
+      "n_objects_on_prompt_frame": 1,
+      "segment_before": {
+        "mean_iou": 0.4963,
+        "hit_rate": 0.566,
+        "first_loss": 3
+      },
+      "segment_after": {
+        "mean_iou": 0.4994,
+        "hit_rate": 0.5927,
+        "first_loss": 3
+      },
+      "frames_repropagated": 523
+    },
+    {
+      "kind": "points",
+      "frame_index": 24,
+      "points": [
+        [
+          0.38625,
+          0.6261159999999999
+        ]
+      ],
+      "point_labels": [
+        1
+      ],
+      "obj_id": 1,
+      "latency_sec": 0.215,
+      "n_objects_on_prompt_frame": 1,
+      "segment_before": {
+        "mean_iou": 0.4989,
+        "hit_rate": 0.5857,
+        "first_loss": 24
+      },
+      "segment_after": {
+        "mean_iou": 0.5143,
+        "hit_rate": 0.6693,
+        "first_loss": 26
+      },
+      "frames_repropagated": 502
+    },
+    {
+      "kind": "points",
+      "frame_index": 26,
+      "points": [
+        [
+          0.310625,
+          0.609375
+        ]
+      ],
+      "point_labels": [
+        1
+      ],
+      "obj_id": 1,
+      "latency_sec": 0.164,
+      "n_objects_on_prompt_frame": 1,
+      "segment_before": {
+        "mean_iou": 0.5137,
+        "hit_rate": 0.668,
+        "first_loss": 26
+      },
+      "segment_after": {
+        "mean_iou": 0.5448,
+        "hit_rate": 0.804,
+        "first_loss": 35
+      },
+      "frames_repropagated": 500
+    },
+    {
+      "kind": "points",
+      "frame_index": 35,
+      "points": [
+        [
+          0.275,
+          0.5982139999999999
+        ]
+      ],
+      "point_labels": [
+        1
+      ],
+      "obj_id": 1,
+      "latency_sec": 0.123,
+      "n_objects_on_prompt_frame": 1,
+      "segment_before": {
+        "mean_iou": 0.5445,
+        "hit_rate": 0.8065,
+        "first_loss": 35
+      },
+      "segment_after": {
+        "mean_iou": 0.5253,
+        "hit_rate": 0.6721,
+        "first_loss": 35
+      },
+      "frames_repropagated": 491
+    },
+    {
+      "kind": "points",
+      "frame_index": 36,
+      "points": [
+        [
+          0.275,
+          0.5982139999999999
+        ]
+      ],
+      "point_labels": [
+        1
+      ],
+      "obj_id": 1,
+      "latency_sec": 0.193,
+      "n_objects_on_prompt_frame": 1,
+      "segment_before": {
+        "mean_iou": 0.5254,
+        "hit_rate": 0.6735,
+        "first_loss": 36
+      },
+      "segment_after": {
+        "mean_iou": 0.5142,
+        "hit_rate": 0.6367,
+        "first_loss": 36
+      },
+      "frames_repropagated": 490
+    },
+    {
+      "kind": "points",
+      "frame_index": 37,
+      "points": [
+        [
+          0.3575,
+          0.607143
+        ]
+      ],
+      "point_labels": [
+        1
+      ],
+      "obj_id": 1,
+      "latency_sec": 0.153,
+      "n_objects_on_prompt_frame": 1,
+      "segment_before": {
+        "mean_iou": 0.5144,
+        "hit_rate": 0.638,
+        "first_loss": 37
+      },
+      "segment_after": {
+        "mean_iou": 0.5055,
+        "hit_rate": 0.6135,
+        "first_loss": 37
+      },
+      "frames_repropagated": 489
+    },
+    {
+      "kind": "points",
+      "frame_index": 38,
+      "points": [
+        [
+          0.3575,
+          0.607143
+        ]
+      ],
+      "point_labels": [
+        1
+      ],
+      "obj_id": 1,
+      "latency_sec": 0.188,
+      "n_objects_on_prompt_frame": 1,
+      "segment_before": {
+        "mean_iou": 0.5057,
+        "hit_rate": 0.6148,
+        "first_loss": 38
+      },
+      "segment_after": {
+        "mean_iou": 0.4829,
+        "hit_rate": 0.4857,
+        "first_loss": 38
+      },
+      "frames_repropagated": 488
+    }
+  ],
+  "n_corrections": 10,
+  "before_correction": {
+    "frames": 526,
+    "frames_with_gt": 526,
+    "mean_iou": 0.514,
+    "median_iou": 0.52,
+    "hit_rate": 0.7034,
+    "zero_pred_frames": 0,
+    "fp_total": 0,
+    "frames_with_fp": 0,
+    "max_objects": 1,
+    "id_switches": 0,
+    "first_loss": 0
+  }
+}

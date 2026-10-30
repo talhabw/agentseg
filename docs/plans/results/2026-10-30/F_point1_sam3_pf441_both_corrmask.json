@@ -1,0 +1,81 @@
+{
+  "frames": 526,
+  "frames_with_gt": 526,
+  "mean_iou": 0.8447,
+  "median_iou": 0.9672,
+  "hit_rate": 0.9829,
+  "zero_pred_frames": 0,
+  "fp_total": 0,
+  "frames_with_fp": 0,
+  "max_objects": 1,
+  "id_switches": 0,
+  "first_loss": null,
+  "name": "F_point1_sam3_pf441_both_corrmask",
+  "model": "sam3",
+  "prompt": {
+    "kind": "points",
+    "frame_index": 441,
+    "points": [
+      [
+        0.368125,
+        0.510045
+      ]
+    ],
+    "point_labels": [
+      1
+    ],
+    "obj_id": 1,
+    "latency_sec": 0.224,
+    "n_objects_on_prompt_frame": 1
+  },
+  "prompt_frame": 441,
+  "direction": "both",
+  "output_prob_thresh": null,
+  "fps_http": 9.07,
+  "propagate_sec": 116.0,
+  "wall_sec": 116.7,
+  "torch_peak_vram_gib": 11.34,
+  "torch_peak_vram_note": "torch.cuda.max_memory_allocated since server start (not reset per run)",
+  "torch_peak_before_run_gib": 11.34,
+  "box_vs_mask_bbox_max_px": 1.0,
+  "frames_missing": [],
+  "prime": null,
+  "keep_cache": false,
+  "corrections": [
+    {
+      "kind": "mask",
+      "frame_index": 0,
+      "obj_id": 1,
+      "mask_area": 16053,
+      "mask_score": 0.97265625,
+      "mask_box_iou_vs_gt": 0.9920010239999996,
+      "latency_sec": 0.11,
+      "n_objects_on_prompt_frame": 1,
+      "segment_before": {
+        "mean_iou": 0.514,
+        "hit_rate": 0.7034,
+        "first_loss": 0
+      },
+      "segment_after": {
+        "mean_iou": 0.8447,
+        "hit_rate": 0.9829,
+        "first_loss": null
+      },
+      "frames_repropagated": 526
+    }
+  ],
+  "n_corrections": 1,
+  "before_correction": {
+    "frames": 526,
+    "frames_with_gt": 526,
+    "mean_iou": 0.514,
+    "median_iou": 0.52,
+    "hit_rate": 0.7034,
+    "zero_pred_frames": 0,
+    "fp_total": 0,
+    "frames_with_fp": 0,
+    "max_objects": 1,
+    "id_switches": 0,
+    "first_loss": 0
+  }
+}

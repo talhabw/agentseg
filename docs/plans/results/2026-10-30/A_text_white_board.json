@@ -1,0 +1,33 @@
+{
+  "frames": 526,
+  "frames_with_gt": 526,
+  "mean_iou": 0.9562,
+  "median_iou": 0.9623,
+  "hit_rate": 1.0,
+  "zero_pred_frames": 0,
+  "fp_total": 0,
+  "frames_with_fp": 0,
+  "max_objects": 1,
+  "id_switches": 0,
+  "first_loss": null,
+  "name": "A_text_white_board",
+  "model": "sam3.1",
+  "prompt": {
+    "kind": "semantic",
+    "frame_index": 0,
+    "text": "white board",
+    "latency_sec": 0.253,
+    "n_objects_on_prompt_frame": 1
+  },
+  "prompt_frame": 0,
+  "direction": "forward",
+  "output_prob_thresh": null,
+  "fps_http": 8.94,
+  "propagate_sec": 58.8,
+  "wall_sec": 59.4,
+  "torch_peak_vram_gib": 18.65,
+  "torch_peak_vram_note": "torch.cuda.max_memory_allocated since server start (not reset per run)",
+  "torch_peak_before_run_gib": 18.0,
+  "box_vs_mask_bbox_max_px": 1.0,
+  "frames_missing": []
+}
