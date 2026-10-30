@@ -26,7 +26,8 @@ def _boxes(path: Path) -> list[tuple[float, float, float, float]]:
         elif len(v) >= 6:
             xs, ys = v[0::2], v[1::2]
             out.append((min(xs), min(ys), max(xs), max(ys)))
-    return out
+    # Zero-area boxes come from empty masks written as degenerate polygons; they are "no object".
+    return [b for b in out if b[2] > b[0] and b[3] > b[1]]
 
 
 def _union(boxes):

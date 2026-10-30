@@ -128,6 +128,8 @@ class VideoTrackJob:
                     if image is None or track is None:
                         return
                     m = np.asarray(ev.mask, dtype=bool)
+                    if not m.any():  # tracker says "not here": no annotation, export writes nothing
+                        return
                     ann = store.create_annotation(
                         image.id, track.label_id, mask_to_bbox(m), source="propagated",
                         status="approved", confidence=None, mask_rle=mask_to_rle(m),
