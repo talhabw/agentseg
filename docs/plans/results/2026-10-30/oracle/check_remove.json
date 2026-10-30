@@ -1,0 +1,70 @@
+{
+  "single_keyframe_sec": 44.8,
+  "single_keyframe": {
+    "frames": 526,
+    "gt_frames": 526,
+    "gt_empty_frames": 0,
+    "mean_iou": 0.9662,
+    "hit_rate": 1.0,
+    "good_rate": 0.9962,
+    "absent_acc": null,
+    "bad_frames": 2
+  },
+  "incremental_add_sec": 31.6,
+  "with_bad_keyframe": {
+    "frames": 526,
+    "gt_frames": 526,
+    "gt_empty_frames": 0,
+    "mean_iou": 0.5493,
+    "hit_rate": 0.5133,
+    "good_rate": 0.3536,
+    "absent_acc": null,
+    "bad_frames": 340
+  },
+  "bad_keyframe_issues": [
+    [
+      172,
+      250,
+      "lost"
+    ],
+    [
+      269,
+      273,
+      "drift"
+    ],
+    [
+      299,
+      299,
+      "scope"
+    ],
+    [
+      302,
+      303,
+      "scope"
+    ],
+    [
+      462,
+      472,
+      "scope"
+    ]
+  ],
+  "remove_rebuild_sec": 43.8,
+  "after_remove": {
+    "frames": 526,
+    "gt_frames": 526,
+    "gt_empty_frames": 0,
+    "mean_iou": 0.9662,
+    "hit_rate": 1.0,
+    "good_rate": 0.9962,
+    "absent_acc": null,
+    "bad_frames": 2
+  },
+  "remove_vs_never_added": {
+    "identical_frames": 526,
+    "frames": 526,
+    "mask_iou_min": 1.0,
+    "mask_iou_mean": 1.0,
+    "mean_box_iou_diff": 0.0
+  },
+  "rerun_identical_frames": 526
+}

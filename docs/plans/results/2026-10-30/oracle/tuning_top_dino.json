@@ -1,0 +1,850 @@
+{
+  "n_configs": 96,
+  "n_meeting_recall": 68,
+  "grid": {
+    "win_area_min": [
+      0.4,
+      0.5
+    ],
+    "win_area_max": [
+      3.0
+    ],
+    "step_area_min": [
+      0.5
+    ],
+    "step_area_max": [
+      2.0
+    ],
+    "kf_area_min": [
+      0.05,
+      0.3
+    ],
+    "kf_area_max": [
+      10.0
+    ],
+    "edge_kf_area": [
+      0.3
+    ],
+    "max_center_jump": [
+      3.0
+    ],
+    "max_aspect_log": [
+      0.7
+    ],
+    "min_fill_ratio": [
+      0.6
+    ],
+    "dino_review": [
+      0.55,
+      0.6,
+      0.65,
+      0.7
+    ],
+    "dino_lost": [
+      0.35,
+      0.5
+    ],
+    "dino_every": [
+      1,
+      3,
+      5
+    ]
+  },
+  "top": [
+    {
+      "recall": 0.7297,
+      "recall_x": 0.931,
+      "precision": 0.1636,
+      "issues": 18,
+      "params": {
+        "win_area_min": 0.4,
+        "win_area_max": 3.0,
+        "step_area_min": 0.5,
+        "step_area_max": 2.0,
+        "kf_area_min": 0.05,
+        "kf_area_max": 10.0,
+        "edge_kf_area": 0.3,
+        "max_center_jump": 3.0,
+        "max_aspect_log": 0.7,
+        "min_fill_ratio": 0.6,
+        "dino_review": 0.6,
+        "dino_lost": 0.35,
+        "dino_every": 3
+      },
+      "per_seq": {
+        "torpedo": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 1,
+          "issue_frames": 1
+        },
+        "sub4": {
+          "bad": 0,
+          "caught": 0,
+          "issues": 3,
+          "issue_frames": 9
+        },
+        "exit": {
+          "bad": 27,
+          "caught": 23,
+          "issues": 10,
+          "issue_frames": 148
+        },
+        "occl": {
+          "bad": 6,
+          "caught": 4,
+          "issues": 2,
+          "issue_frames": 5
+        },
+        "mid": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 2,
+          "issue_frames": 2
+        }
+      }
+    },
+    {
+      "recall": 0.7297,
+      "recall_x": 0.931,
+      "precision": 0.1636,
+      "issues": 18,
+      "params": {
+        "win_area_min": 0.4,
+        "win_area_max": 3.0,
+        "step_area_min": 0.5,
+        "step_area_max": 2.0,
+        "kf_area_min": 0.05,
+        "kf_area_max": 10.0,
+        "edge_kf_area": 0.3,
+        "max_center_jump": 3.0,
+        "max_aspect_log": 0.7,
+        "min_fill_ratio": 0.6,
+        "dino_review": 0.6,
+        "dino_lost": 0.5,
+        "dino_every": 3
+      },
+      "per_seq": {
+        "torpedo": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 1,
+          "issue_frames": 1
+        },
+        "sub4": {
+          "bad": 0,
+          "caught": 0,
+          "issues": 3,
+          "issue_frames": 9
+        },
+        "exit": {
+          "bad": 27,
+          "caught": 23,
+          "issues": 10,
+          "issue_frames": 148
+        },
+        "occl": {
+          "bad": 6,
+          "caught": 4,
+          "issues": 2,
+          "issue_frames": 5
+        },
+        "mid": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 2,
+          "issue_frames": 2
+        }
+      }
+    },
+    {
+      "recall": 0.7297,
+      "recall_x": 0.931,
+      "precision": 0.1552,
+      "issues": 18,
+      "params": {
+        "win_area_min": 0.4,
+        "win_area_max": 3.0,
+        "step_area_min": 0.5,
+        "step_area_max": 2.0,
+        "kf_area_min": 0.05,
+        "kf_area_max": 10.0,
+        "edge_kf_area": 0.3,
+        "max_center_jump": 3.0,
+        "max_aspect_log": 0.7,
+        "min_fill_ratio": 0.6,
+        "dino_review": 0.6,
+        "dino_lost": 0.35,
+        "dino_every": 1
+      },
+      "per_seq": {
+        "torpedo": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 1,
+          "issue_frames": 1
+        },
+        "sub4": {
+          "bad": 0,
+          "caught": 0,
+          "issues": 3,
+          "issue_frames": 9
+        },
+        "exit": {
+          "bad": 27,
+          "caught": 23,
+          "issues": 10,
+          "issue_frames": 148
+        },
+        "occl": {
+          "bad": 6,
+          "caught": 4,
+          "issues": 2,
+          "issue_frames": 13
+        },
+        "mid": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 2,
+          "issue_frames": 3
+        }
+      }
+    },
+    {
+      "recall": 0.7297,
+      "recall_x": 0.931,
+      "precision": 0.1552,
+      "issues": 18,
+      "params": {
+        "win_area_min": 0.4,
+        "win_area_max": 3.0,
+        "step_area_min": 0.5,
+        "step_area_max": 2.0,
+        "kf_area_min": 0.05,
+        "kf_area_max": 10.0,
+        "edge_kf_area": 0.3,
+        "max_center_jump": 3.0,
+        "max_aspect_log": 0.7,
+        "min_fill_ratio": 0.6,
+        "dino_review": 0.6,
+        "dino_lost": 0.5,
+        "dino_every": 1
+      },
+      "per_seq": {
+        "torpedo": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 1,
+          "issue_frames": 1
+        },
+        "sub4": {
+          "bad": 0,
+          "caught": 0,
+          "issues": 3,
+          "issue_frames": 9
+        },
+        "exit": {
+          "bad": 27,
+          "caught": 23,
+          "issues": 10,
+          "issue_frames": 148
+        },
+        "occl": {
+          "bad": 6,
+          "caught": 4,
+          "issues": 2,
+          "issue_frames": 13
+        },
+        "mid": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 2,
+          "issue_frames": 3
+        }
+      }
+    },
+    {
+      "recall": 0.7297,
+      "recall_x": 0.931,
+      "precision": 0.1525,
+      "issues": 21,
+      "params": {
+        "win_area_min": 0.4,
+        "win_area_max": 3.0,
+        "step_area_min": 0.5,
+        "step_area_max": 2.0,
+        "kf_area_min": 0.05,
+        "kf_area_max": 10.0,
+        "edge_kf_area": 0.3,
+        "max_center_jump": 3.0,
+        "max_aspect_log": 0.7,
+        "min_fill_ratio": 0.6,
+        "dino_review": 0.65,
+        "dino_lost": 0.35,
+        "dino_every": 3
+      },
+      "per_seq": {
+        "torpedo": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 1,
+          "issue_frames": 1
+        },
+        "sub4": {
+          "bad": 0,
+          "caught": 0,
+          "issues": 3,
+          "issue_frames": 9
+        },
+        "exit": {
+          "bad": 27,
+          "caught": 23,
+          "issues": 11,
+          "issue_frames": 149
+        },
+        "occl": {
+          "bad": 6,
+          "caught": 4,
+          "issues": 2,
+          "issue_frames": 14
+        },
+        "mid": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 4,
+          "issue_frames": 4
+        }
+      }
+    },
+    {
+      "recall": 0.7297,
+      "recall_x": 0.931,
+      "precision": 0.1525,
+      "issues": 21,
+      "params": {
+        "win_area_min": 0.4,
+        "win_area_max": 3.0,
+        "step_area_min": 0.5,
+        "step_area_max": 2.0,
+        "kf_area_min": 0.05,
+        "kf_area_max": 10.0,
+        "edge_kf_area": 0.3,
+        "max_center_jump": 3.0,
+        "max_aspect_log": 0.7,
+        "min_fill_ratio": 0.6,
+        "dino_review": 0.65,
+        "dino_lost": 0.5,
+        "dino_every": 3
+      },
+      "per_seq": {
+        "torpedo": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 1,
+          "issue_frames": 1
+        },
+        "sub4": {
+          "bad": 0,
+          "caught": 0,
+          "issues": 3,
+          "issue_frames": 9
+        },
+        "exit": {
+          "bad": 27,
+          "caught": 23,
+          "issues": 11,
+          "issue_frames": 149
+        },
+        "occl": {
+          "bad": 6,
+          "caught": 4,
+          "issues": 2,
+          "issue_frames": 14
+        },
+        "mid": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 4,
+          "issue_frames": 4
+        }
+      }
+    },
+    {
+      "recall": 0.7297,
+      "recall_x": 0.931,
+      "precision": 0.1459,
+      "issues": 21,
+      "params": {
+        "win_area_min": 0.5,
+        "win_area_max": 3.0,
+        "step_area_min": 0.5,
+        "step_area_max": 2.0,
+        "kf_area_min": 0.05,
+        "kf_area_max": 10.0,
+        "edge_kf_area": 0.3,
+        "max_center_jump": 3.0,
+        "max_aspect_log": 0.7,
+        "min_fill_ratio": 0.6,
+        "dino_review": 0.6,
+        "dino_lost": 0.35,
+        "dino_every": 1
+      },
+      "per_seq": {
+        "torpedo": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 2,
+          "issue_frames": 4
+        },
+        "sub4": {
+          "bad": 0,
+          "caught": 0,
+          "issues": 3,
+          "issue_frames": 9
+        },
+        "exit": {
+          "bad": 27,
+          "caught": 23,
+          "issues": 10,
+          "issue_frames": 148
+        },
+        "occl": {
+          "bad": 6,
+          "caught": 4,
+          "issues": 3,
+          "issue_frames": 16
+        },
+        "mid": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 3,
+          "issue_frames": 8
+        }
+      }
+    },
+    {
+      "recall": 0.7297,
+      "recall_x": 0.931,
+      "precision": 0.1459,
+      "issues": 21,
+      "params": {
+        "win_area_min": 0.5,
+        "win_area_max": 3.0,
+        "step_area_min": 0.5,
+        "step_area_max": 2.0,
+        "kf_area_min": 0.05,
+        "kf_area_max": 10.0,
+        "edge_kf_area": 0.3,
+        "max_center_jump": 3.0,
+        "max_aspect_log": 0.7,
+        "min_fill_ratio": 0.6,
+        "dino_review": 0.6,
+        "dino_lost": 0.5,
+        "dino_every": 1
+      },
+      "per_seq": {
+        "torpedo": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 2,
+          "issue_frames": 4
+        },
+        "sub4": {
+          "bad": 0,
+          "caught": 0,
+          "issues": 3,
+          "issue_frames": 9
+        },
+        "exit": {
+          "bad": 27,
+          "caught": 23,
+          "issues": 10,
+          "issue_frames": 148
+        },
+        "occl": {
+          "bad": 6,
+          "caught": 4,
+          "issues": 3,
+          "issue_frames": 16
+        },
+        "mid": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 3,
+          "issue_frames": 8
+        }
+      }
+    },
+    {
+      "recall": 0.7297,
+      "recall_x": 0.931,
+      "precision": 0.1378,
+      "issues": 21,
+      "params": {
+        "win_area_min": 0.4,
+        "win_area_max": 3.0,
+        "step_area_min": 0.5,
+        "step_area_max": 2.0,
+        "kf_area_min": 0.05,
+        "kf_area_max": 10.0,
+        "edge_kf_area": 0.3,
+        "max_center_jump": 3.0,
+        "max_aspect_log": 0.7,
+        "min_fill_ratio": 0.6,
+        "dino_review": 0.65,
+        "dino_lost": 0.35,
+        "dino_every": 1
+      },
+      "per_seq": {
+        "torpedo": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 1,
+          "issue_frames": 1
+        },
+        "sub4": {
+          "bad": 0,
+          "caught": 0,
+          "issues": 3,
+          "issue_frames": 9
+        },
+        "exit": {
+          "bad": 27,
+          "caught": 23,
+          "issues": 11,
+          "issue_frames": 151
+        },
+        "occl": {
+          "bad": 6,
+          "caught": 4,
+          "issues": 2,
+          "issue_frames": 18
+        },
+        "mid": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 4,
+          "issue_frames": 17
+        }
+      }
+    },
+    {
+      "recall": 0.7297,
+      "recall_x": 0.931,
+      "precision": 0.1378,
+      "issues": 21,
+      "params": {
+        "win_area_min": 0.4,
+        "win_area_max": 3.0,
+        "step_area_min": 0.5,
+        "step_area_max": 2.0,
+        "kf_area_min": 0.05,
+        "kf_area_max": 10.0,
+        "edge_kf_area": 0.3,
+        "max_center_jump": 3.0,
+        "max_aspect_log": 0.7,
+        "min_fill_ratio": 0.6,
+        "dino_review": 0.65,
+        "dino_lost": 0.5,
+        "dino_every": 1
+      },
+      "per_seq": {
+        "torpedo": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 1,
+          "issue_frames": 1
+        },
+        "sub4": {
+          "bad": 0,
+          "caught": 0,
+          "issues": 3,
+          "issue_frames": 9
+        },
+        "exit": {
+          "bad": 27,
+          "caught": 23,
+          "issues": 11,
+          "issue_frames": 151
+        },
+        "occl": {
+          "bad": 6,
+          "caught": 4,
+          "issues": 2,
+          "issue_frames": 18
+        },
+        "mid": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 4,
+          "issue_frames": 17
+        }
+      }
+    },
+    {
+      "recall": 0.7297,
+      "recall_x": 0.931,
+      "precision": 0.1184,
+      "issues": 23,
+      "params": {
+        "win_area_min": 0.4,
+        "win_area_max": 3.0,
+        "step_area_min": 0.5,
+        "step_area_max": 2.0,
+        "kf_area_min": 0.05,
+        "kf_area_max": 10.0,
+        "edge_kf_area": 0.3,
+        "max_center_jump": 3.0,
+        "max_aspect_log": 0.7,
+        "min_fill_ratio": 0.6,
+        "dino_review": 0.7,
+        "dino_lost": 0.35,
+        "dino_every": 3
+      },
+      "per_seq": {
+        "torpedo": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 1,
+          "issue_frames": 1
+        },
+        "sub4": {
+          "bad": 0,
+          "caught": 0,
+          "issues": 3,
+          "issue_frames": 9
+        },
+        "exit": {
+          "bad": 27,
+          "caught": 23,
+          "issues": 12,
+          "issue_frames": 160
+        },
+        "occl": {
+          "bad": 6,
+          "caught": 4,
+          "issues": 2,
+          "issue_frames": 17
+        },
+        "mid": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 5,
+          "issue_frames": 41
+        }
+      }
+    },
+    {
+      "recall": 0.7297,
+      "recall_x": 0.931,
+      "precision": 0.1184,
+      "issues": 23,
+      "params": {
+        "win_area_min": 0.4,
+        "win_area_max": 3.0,
+        "step_area_min": 0.5,
+        "step_area_max": 2.0,
+        "kf_area_min": 0.05,
+        "kf_area_max": 10.0,
+        "edge_kf_area": 0.3,
+        "max_center_jump": 3.0,
+        "max_aspect_log": 0.7,
+        "min_fill_ratio": 0.6,
+        "dino_review": 0.7,
+        "dino_lost": 0.5,
+        "dino_every": 3
+      },
+      "per_seq": {
+        "torpedo": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 1,
+          "issue_frames": 1
+        },
+        "sub4": {
+          "bad": 0,
+          "caught": 0,
+          "issues": 3,
+          "issue_frames": 9
+        },
+        "exit": {
+          "bad": 27,
+          "caught": 23,
+          "issues": 12,
+          "issue_frames": 160
+        },
+        "occl": {
+          "bad": 6,
+          "caught": 4,
+          "issues": 2,
+          "issue_frames": 17
+        },
+        "mid": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 5,
+          "issue_frames": 41
+        }
+      }
+    },
+    {
+      "recall": 0.7297,
+      "recall_x": 0.931,
+      "precision": 0.1111,
+      "issues": 23,
+      "params": {
+        "win_area_min": 0.4,
+        "win_area_max": 3.0,
+        "step_area_min": 0.5,
+        "step_area_max": 2.0,
+        "kf_area_min": 0.05,
+        "kf_area_max": 10.0,
+        "edge_kf_area": 0.3,
+        "max_center_jump": 3.0,
+        "max_aspect_log": 0.7,
+        "min_fill_ratio": 0.6,
+        "dino_review": 0.7,
+        "dino_lost": 0.35,
+        "dino_every": 1
+      },
+      "per_seq": {
+        "torpedo": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 1,
+          "issue_frames": 1
+        },
+        "sub4": {
+          "bad": 0,
+          "caught": 0,
+          "issues": 3,
+          "issue_frames": 9
+        },
+        "exit": {
+          "bad": 27,
+          "caught": 23,
+          "issues": 12,
+          "issue_frames": 165
+        },
+        "occl": {
+          "bad": 6,
+          "caught": 4,
+          "issues": 2,
+          "issue_frames": 21
+        },
+        "mid": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 5,
+          "issue_frames": 47
+        }
+      }
+    },
+    {
+      "recall": 0.7297,
+      "recall_x": 0.931,
+      "precision": 0.1111,
+      "issues": 23,
+      "params": {
+        "win_area_min": 0.4,
+        "win_area_max": 3.0,
+        "step_area_min": 0.5,
+        "step_area_max": 2.0,
+        "kf_area_min": 0.05,
+        "kf_area_max": 10.0,
+        "edge_kf_area": 0.3,
+        "max_center_jump": 3.0,
+        "max_aspect_log": 0.7,
+        "min_fill_ratio": 0.6,
+        "dino_review": 0.7,
+        "dino_lost": 0.5,
+        "dino_every": 1
+      },
+      "per_seq": {
+        "torpedo": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 1,
+          "issue_frames": 1
+        },
+        "sub4": {
+          "bad": 0,
+          "caught": 0,
+          "issues": 3,
+          "issue_frames": 9
+        },
+        "exit": {
+          "bad": 27,
+          "caught": 23,
+          "issues": 12,
+          "issue_frames": 165
+        },
+        "occl": {
+          "bad": 6,
+          "caught": 4,
+          "issues": 2,
+          "issue_frames": 21
+        },
+        "mid": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 5,
+          "issue_frames": 47
+        }
+      }
+    },
+    {
+      "recall": 0.7297,
+      "recall_x": 0.931,
+      "precision": 0.1304,
+      "issues": 24,
+      "params": {
+        "win_area_min": 0.5,
+        "win_area_max": 3.0,
+        "step_area_min": 0.5,
+        "step_area_max": 2.0,
+        "kf_area_min": 0.05,
+        "kf_area_max": 10.0,
+        "edge_kf_area": 0.3,
+        "max_center_jump": 3.0,
+        "max_aspect_log": 0.7,
+        "min_fill_ratio": 0.6,
+        "dino_review": 0.65,
+        "dino_lost": 0.35,
+        "dino_every": 1
+      },
+      "per_seq": {
+        "torpedo": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 2,
+          "issue_frames": 4
+        },
+        "sub4": {
+          "bad": 0,
+          "caught": 0,
+          "issues": 3,
+          "issue_frames": 9
+        },
+        "exit": {
+          "bad": 27,
+          "caught": 23,
+          "issues": 11,
+          "issue_frames": 151
+        },
+        "occl": {
+          "bad": 6,
+          "caught": 4,
+          "issues": 3,
+          "issue_frames": 21
+        },
+        "mid": {
+          "bad": 2,
+          "caught": 0,
+          "issues": 5,
+          "issue_frames": 22
+        }
+      }
+    }
+  ]
+}
