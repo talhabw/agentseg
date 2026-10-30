@@ -32,10 +32,12 @@ def test_activity_events_and_artifacts(tmp_path):
             event = created.json()
             assert event["type"] == "mask.proposed"
             assert event["frame"] == 3
+            assert event["project_root_dir"] == project.root_dir
 
             listed = client.get("/api/activity/events", params={"after": 0})
             assert listed.status_code == 200
             assert listed.json()["events"][-1]["id"] == event["id"]
+            assert listed.json()["events"][-1]["project_root_dir"] == project.root_dir
 
             registered = client.post("/api/activity/artifacts", json={
                 "path": str(artifact), "kind": "frame_overlay",

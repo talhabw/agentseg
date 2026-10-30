@@ -133,13 +133,18 @@ async def get_image_thumbnail(image_id: int, size: int = 200):
 
 
 @router.get("/{image_id}/optimized")
-async def get_optimized_image(image_id: int, max_width: int = 2048, quality: int = 85):
+async def get_optimized_image(image_id: int, max_width: int = 2048, quality: int = 85,
+                              project_root_dir: Optional[str] = None):
     """Serve a resized/compressed version of the image for display.
 
     This endpoint reduces image size for faster loading while maintaining
     acceptable quality for annotation work. The original image dimensions
     are preserved in the database for coordinate mapping.
     """
+    # Project/image IDs are DB-local. Reject a delayed prefetch from an old
+    # editor project rather than poisoning its HTTP/bitmap cache with new bytes.
+    if project_root_dir is not None and project_root_dir != get_project().root_dir:
+        raise HTTPException(status_code=409, detail="Image belongs to another project")
     store = get_store()
     image = store.get_image_by_id(image_id)
 

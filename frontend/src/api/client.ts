@@ -152,12 +152,12 @@ export async function getImageByIndex(orderIndex: number): Promise<ImageRecord> 
 
 export function getImageUrl(imageId: number, cacheBuster?: string | number): string {
   const url = `/api/images/${imageId}/file`;
-  return cacheBuster ? `${url}?v=${cacheBuster}` : url;
+  return cacheBuster ? `${url}?v=${encodeURIComponent(cacheBuster)}` : url;
 }
 
 export function getThumbnailUrl(imageId: number, size = 200, cacheBuster?: string | number): string {
   let url = `/api/images/${imageId}/thumbnail?size=${size}`;
-  if (cacheBuster) url += `&v=${cacheBuster}`;
+  if (cacheBuster) url += `&v=${encodeURIComponent(cacheBuster)}`;
   return url;
 }
 
@@ -165,10 +165,12 @@ export function getOptimizedImageUrl(
   imageId: number,
   maxWidth = 2048,
   quality = 85,
-  cacheBuster?: string | number
+  projectRootDir?: string
 ): string {
   let url = `/api/images/${imageId}/optimized?max_width=${maxWidth}&quality=${quality}`;
-  if (cacheBuster) url += `&v=${cacheBuster}`;
+  // Namespace both HTTP/bitmap caches AND the backend request. An old
+  // prefetch must not cache the new project's bytes under the old DB's key.
+  if (projectRootDir) url += `&project_root_dir=${encodeURIComponent(projectRootDir)}`;
   return url;
 }
 

@@ -18,14 +18,14 @@ export function ImageCanvas() {
   const imageRef = useRef<Konva.Image>(null);
 
   const [containerSize, setContainerSize] = useState({ width: 800, height: 600 });
-  const [image, setImage] = useState<HTMLImageElement | null>(null);
+  const [loadedImage, setLoadedImage] = useState<{ src: string; image: HTMLImageElement } | null>(null);
   const [stageScale, setStageScale] = useState(1);
   const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
   const [drawingBbox, setDrawingBbox] = useState<DrawingBbox | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [isImageLoading, setIsImageLoading] = useState(true);
   const [agentDrawProgress, setAgentDrawProgress] = useState(0);
-  const [agentMaskImage, setAgentMaskImage] = useState<HTMLImageElement | null>(null);
+  const [loadedAgentMask, setLoadedAgentMask] = useState<{ url: string; image: HTMLImageElement } | null>(null);
 
   // Cache for decoded mask canvases (previous ref for cleanup)
   const prevMaskCanvasesRef = useRef<Map<number, HTMLCanvasElement>>(new Map());
@@ -43,8 +43,16 @@ export function ImageCanvas() {
     addRefinePoint,
   } = useAnnotationStore();
   const { mode, maskOpacity, performanceProgress, agentActive, agentOverlay } = useUIStore();
+  const agentMaskImage = loadedAgentMask?.url === agentOverlay?.maskUrl ? loadedAgentMask?.image : null;
 
   const currentImage = images[currentImageIndex];
+  const project = useProjectStore((s) => s.project);
+  // Numeric IDs are local to each project's DB, not globally unique. Also
+  // hide the previous bitmap immediately while the next frame is loading.
+  const imageSrc = currentImage
+    ? getOptimizedImageUrl(currentImage.id, 2048, 85, project?.root_dir)
+    : null;
+  const image = loadedImage?.src === imageSrc ? loadedImage.image : null;
   const agentOverlayMatchesCurrent = Boolean(
     currentImage && agentOverlay &&
     (agentOverlay.imageId == null || agentOverlay.imageId === currentImage.id) &&
@@ -65,18 +73,18 @@ export function ImageCanvas() {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [agentOverlay?.phase, agentOverlay?.bbox?.join(',')]);
+  }, [agentOverlay?.phase, agentOverlay?.bbox]);
 
   useEffect(() => {
     const url = agentOverlay?.maskUrl;
     if (!url) {
-      setAgentMaskImage(null);
+      setLoadedAgentMask(null);
       return;
     }
     let cancelled = false;
     const img = new window.Image();
-    img.onload = () => { if (!cancelled) setAgentMaskImage(img); };
-    img.onerror = () => { if (!cancelled) setAgentMaskImage(null); };
+    img.onload = () => { if (!cancelled) setLoadedAgentMask({ url, image: img }); };
+    img.onerror = () => { if (!cancelled) setLoadedAgentMask(null); };
     img.src = url;
     return () => { cancelled = true; };
   }, [agentOverlay?.maskUrl]);
@@ -117,9 +125,6 @@ export function ImageCanvas() {
     return newCanvases;
   }, [annotations, maskOpacity, getLabelColor, isPerformanceLoopActive]);
 
-  // Get project for cache busting
-  const project = useProjectStore((s) => s.project);
-
   const fitToView = useCallback((img: HTMLImageElement) => {
     if (!containerRef.current) return;
 
@@ -137,19 +142,18 @@ export function ImageCanvas() {
 
   // Load image when current image changes (skip during performance loop)
   useEffect(() => {
-    if (!currentImage || isPerformanceLoopActive) {
+    if (!currentImage || !imageSrc || isPerformanceLoopActive) {
       if (!currentImage) {
-        setImage(null);
+        setLoadedImage(null);
         setIsImageLoading(false);
       }
       return;
     }
 
     let cancelled = false;
-    const imageSrc = getOptimizedImageUrl(currentImage.id, 2048, 85, project?.id);
     const cachedImage = getCachedImage(imageSrc);
     if (cachedImage) {
-      setImage(cachedImage);
+      setLoadedImage({ src: imageSrc, image: cachedImage });
       fitToView(cachedImage);
       setIsImageLoading(false);
       return;
@@ -163,7 +167,7 @@ export function ImageCanvas() {
 
       preloadImage(imageSrc).then((loadedImage) => {
         if (!cancelled) {
-          setImage(loadedImage);
+          setLoadedImage({ src: imageSrc, image: loadedImage });
           fitToView(loadedImage);
           setIsImageLoading(false);
         }
@@ -180,7 +184,12 @@ export function ImageCanvas() {
       window.clearTimeout(timeoutId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- depend on currentImage?.id not the full object to avoid unnecessary reloads
-  }, [currentImage?.id, project?.id, isPerformanceLoopActive, fitToView]);
+  }, [imageSrc, isPerformanceLoopActive, fitToView]);
+
+  useEffect(() => {
+    setDrawingBbox(null);
+    setIsDrawing(false);
+  }, [imageSrc]);
 
   // Resize handler
   useEffect(() => {
@@ -429,7 +438,7 @@ export function ImageCanvas() {
     <div
       ref={containerRef}
       className={`agent-canvas-shell flex-1 min-w-0 bg-background overflow-hidden cursor-crosshair ${agentActive ? 'agent-canvas-active' : ''}`}
-      aria-busy={isImageLoading}
+      aria-busy={isImageLoading || !image}
       style={{ cursor: mode === 'view' ? 'grab' : mode === 'refine' ? 'crosshair' : 'crosshair' }}
     >
       <Stage
@@ -467,7 +476,7 @@ export function ImageCanvas() {
         </Layer>
 
         {/* Mask overlay layer - only show when image is loaded and annotations match current image */}
-        <Layer>
+        <Layer visible={Boolean(image)}>
           {annotations
             .filter((ann) => ann.image_id === currentImage?.id)
             .map((ann) => {
@@ -499,7 +508,7 @@ export function ImageCanvas() {
         </Layer>
 
         {/* Annotations layer (bboxes) - only show when image is loaded and annotations match current image */}
-        <Layer>
+        <Layer visible={Boolean(image)}>
           {/* Existing annotations */}
           {annotations
             .filter((ann) => ann.image_id === currentImage?.id)
@@ -599,7 +608,7 @@ export function ImageCanvas() {
         </Layer>
 
         {/* Refine points layer */}
-        <Layer>
+        <Layer visible={Boolean(image)}>
           {refinePoints.map((point, idx) => (
             <Circle
               key={idx}

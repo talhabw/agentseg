@@ -16,6 +16,7 @@ import { useUIStore } from './stores/uiStore';
 import { preloadImage } from './utils/imageCache';
 import { runYoloOnCurrentImage, startAutoYolo, stopAutoYolo } from './utils/yoloRunner';
 import { useAgentActivity, type AgentActivityEvent } from './hooks/useAgentActivity';
+import { refreshAgentAnnotations } from './utils/agentAnnotations';
 import {
   getTrackingJobId,
   isTrackingJobPaused,
@@ -46,11 +47,16 @@ function AppContent() {
   } = useUIStore();
 
   const currentImage = images[currentImageIndex];
+  const currentImageId = currentImage?.id;
+  const projectRootDir = project?.root_dir;
 
   // The activity stream is the visual bridge between CLI/SAM work and the
   // canvas. It deliberately stays outside the sidebar: the image itself is
   // where progress is easiest to understand.
   const handleAgentEvent = useCallback((event: AgentActivityEvent) => {
+    const project = useProjectStore.getState().project;
+    if (event.project_root_dir && event.project_root_dir !== project?.root_dir) return;
+    refreshAgentAnnotations(event);
     const ui = useUIStore.getState();
     const running = event.status === 'running' || event.type.endsWith('.started') || event.type === 'video_job.frame';
     const finished = event.status === 'error' || event.type.endsWith('.failed') ||
@@ -64,7 +70,7 @@ function AppContent() {
       ? event.bbox as [number, number, number, number]
       : undefined;
     const renderUrl = typeof event.render_url === 'string' ? event.render_url : undefined;
-    const maskUrl = renderUrl ? `${renderUrl}${renderUrl.includes('?') ? '&' : '?'}agent=1` : undefined;
+    const maskUrl = renderUrl ? `${renderUrl}${renderUrl.includes('?') ? '&' : '?'}agent=${event.seq ?? Date.now()}` : undefined;
 
     if (frame == null && imageId == null && !bbox && !renderUrl) return;
     const phase = event.type === 'segment.started' ? 'drawing'
@@ -89,7 +95,19 @@ function AppContent() {
     }
   }, [images]);
 
-  useAgentActivity(project?.id, handleAgentEvent);
+  useAgentActivity(project?.id, handleAgentEvent, project?.root_dir);
+
+  // The CLI can switch the backend's active DB while this tab stays open.
+  // Read and adopt that state; never reopen the DB just to refresh the browser.
+  useEffect(() => {
+    const sync = () => { void useProjectStore.getState().syncCurrentProject().catch(() => {}); };
+    const timer = window.setInterval(sync, 1000);
+    window.addEventListener('focus', sync);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', sync);
+    };
+  }, []);
 
   // On app load: try to reconnect to last project and check model status
   useEffect(() => {
@@ -137,7 +155,7 @@ function AppContent() {
       window.clearTimeout(timeoutId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentImage?.id]); // Only re-run on image change; callbacks read fresh store state
+  }, [currentImage?.id, project?.root_dir]);
 
   // Warm browser/API caches for the next few frames so navigation feels instant.
   useEffect(() => {
@@ -152,7 +170,7 @@ function AppContent() {
     useAnnotationStore.getState().prefetchAnnotations(upcomingImages.map((img) => img.id));
 
     for (const img of upcomingImages) {
-      const src = api.getOptimizedImageUrl(img.id, 2048, 85, project.id);
+      const src = api.getOptimizedImageUrl(img.id, 2048, 85, project.root_dir);
       void preloadImage(src).catch(() => {
         // Prefetch is best-effort; the active image loader will surface real errors.
       });
@@ -161,7 +179,7 @@ function AppContent() {
 
   // Persist last visited image index after navigation settles.
   useEffect(() => {
-    if (!project || !currentImage) return;
+    if (!projectRootDir || currentImageId == null) return;
 
     const timeoutId = window.setTimeout(() => {
       api.setSetting('last_image_index', String(currentImageIndex)).catch(() => {});
@@ -170,7 +188,7 @@ function AppContent() {
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [project?.id, currentImage?.id, currentImageIndex]);
+  }, [projectRootDir, currentImageId, currentImageIndex]);
 
   // Load labels when project changes; re-attach to a backend tracking job that
   // is still running (tracking survives tab reloads now that it lives server-side)
@@ -180,7 +198,7 @@ function AppContent() {
       void reattachActiveTrackingJob();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project?.id]); // Only re-run on project change
+  }, [project?.root_dir]);
 
   // Handle segmentation
   const handleSegment = useCallback(async () => {

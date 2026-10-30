@@ -91,6 +91,9 @@ def publish(
     project, store = _project_context(project_id)
     now = time.time()
     payload = {k: v for k, v in data.items() if v is not None}
+    # IDs are scoped to a project DB and commonly repeat across CLI projects.
+    # Let an already-open editor reject events from a different DB immediately.
+    payload["project_root_dir"] = project.root_dir
     with _LOCK:
         cur = store.conn.execute(
             """INSERT INTO activity_events

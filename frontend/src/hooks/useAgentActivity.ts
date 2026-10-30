@@ -6,6 +6,7 @@ export interface AgentActivityEvent {
   id?: string | number;
   run_id?: string;
   project_id?: number;
+  project_root_dir?: string;
   source?: string;
   type: string;
   action?: string;
@@ -48,8 +49,10 @@ function mergeEvents(current: AgentActivityEvent[], incoming: AgentActivityEvent
     .slice(-MAX_EVENTS);
 }
 
-export function useAgentActivity(projectId: number | undefined, onFollowFrame?: (event: AgentActivityEvent) => void) {
-  const [events, setEvents] = useState<AgentActivityEvent[]>([]);
+export function useAgentActivity(projectId: number | undefined, onFollowFrame?: (event: AgentActivityEvent) => void, projectRootDir?: string) {
+  const projectKey = `${projectRootDir ?? ''}:${projectId ?? ''}`;
+  const [history, setHistory] = useState<{ key: string; events: AgentActivityEvent[] }>({ key: projectKey, events: [] });
+  const events = history.key === projectKey ? history.events : [];
   const [connected, setConnected] = useState(false);
   const followAgent = useUIStore((state) => state.followAgent);
   const setFollowAgent = useUIStore((state) => state.setFollowAgent);
@@ -61,6 +64,7 @@ export function useAgentActivity(projectId: number | undefined, onFollowFrame?: 
   }, [onFollowFrame]);
 
   useEffect(() => {
+    lastSeq.current = 0;
     if (!projectId) {
       return;
     }
@@ -78,24 +82,22 @@ export function useAgentActivity(projectId: number | undefined, onFollowFrame?: 
             : []);
         const parsed = list.map(parseEvent).filter((event): event is AgentActivityEvent => Boolean(event));
         if (!cancelled) {
-          setEvents((current) => mergeEvents(current, parsed));
-          lastSeq.current = parsed.reduce((max, event) => Math.max(max, event.seq ?? 0), 0);
+          setHistory({ key: projectKey, events: parsed });
+          lastSeq.current = parsed.reduce((max, event) => Math.max(max, event.seq ?? 0), lastSeq.current);
         }
       } catch {
         // The activity view remains useful when an older backend has no activity endpoint.
       }
     };
 
-    void loadHistory();
-    const stream = new EventSource(`/api/activity/stream?project_id=${projectId}&after=${lastSeq.current}`);
-    stream.onopen = () => setConnected(true);
-    stream.onerror = () => setConnected(false);
+    let stream: EventSource | null = null;
     const handleMessage = (message: MessageEvent<string>) => {
       try {
         const event = parseEvent(JSON.parse(message.data));
         if (!event || cancelled) return;
+        if (event.project_root_dir && event.project_root_dir !== projectRootDir) return;
         lastSeq.current = Math.max(lastSeq.current, event.seq ?? 0);
-        setEvents((current) => mergeEvents(current, [event]));
+        setHistory((current) => ({ key: projectKey, events: mergeEvents(current.key === projectKey ? current.events : [], [event]) }));
         onFollowFrameRef.current?.(event);
       } catch {
         // Ignore malformed keepalive or extension events.
@@ -103,17 +105,25 @@ export function useAgentActivity(projectId: number | undefined, onFollowFrame?: 
     };
     // The backend names its SSE event `activity`; listen to both named and
     // unnamed messages so this client remains compatible with simple proxies.
-    stream.addEventListener('activity', handleMessage);
-    stream.onmessage = handleMessage;
+    // Open after loading history so old frame events aren't replayed as live
+    // work, moving the canvas or resurrecting a stale preview on every mount.
+    void loadHistory().then(() => {
+      if (cancelled) return;
+      stream = new EventSource(`/api/activity/stream?project_id=${projectId}&after=${lastSeq.current}`);
+      stream.onopen = () => { if (!cancelled) setConnected(true); };
+      stream.onerror = () => { if (!cancelled) setConnected(false); };
+      stream.addEventListener('activity', handleMessage);
+      stream.onmessage = handleMessage;
+    });
 
     return () => {
       cancelled = true;
-      stream.removeEventListener('activity', handleMessage);
-      stream.close();
+      stream?.removeEventListener('activity', handleMessage);
+      stream?.close();
       setConnected(false);
     };
-  }, [projectId, followAgent]);
+  }, [projectId, projectRootDir, projectKey]);
 
-  const clear = useCallback(() => setEvents([]), []);
+  const clear = useCallback(() => setHistory({ key: projectKey, events: [] }), [projectKey]);
   return { events, connected, followAgent, setFollowAgent, clear };
 }
