@@ -32,6 +32,7 @@ ENV/
 *.swo
 
 # Project specific
+/label_Data/
 models/
 models
 !models/.gitkeep
