@@ -1,6 +1,6 @@
 ---
 name: autoseg-label
-description: Label or track an object through a video / image sequence in this repo with the `autoseg` CLI (SAM 3 tracking + health checks). Use for requests like "şu torpedoyu etiketle", "label the board in this folder", "track X through these frames", "fix the labels of track N", or exporting those labels.
+description: Label or track an object through a video / image sequence in this repo with the `autoseg` CLI (SAM 3 tracking + health checks). Use for requests like "label the torpedo", "label the board in this folder", "track X through these frames", "fix the labels of track N", or exporting those labels.
 ---
 
 # Labeling a sequence with `autoseg`

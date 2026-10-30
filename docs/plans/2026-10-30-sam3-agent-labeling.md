@@ -186,7 +186,7 @@ baştan sona etiketlenebiliyor; `autoseg --help` ve her alt komut `--help` eksik
 
 ## WP6 · Skill (S)
 
-`.claude/skills/autoseg-label/SKILL.md` (+ gerekirse `reference.md`). İçerik:
+`.agent/skills/autoseg-label/SKILL.md` (+ gerekirse `reference.md`). İçerik:
 
 - Ne zaman kullanılır: "X'i etiketle / takip et" istekleri.
 - Ön koşul: `autoseg status`; sam_server/backend kapalıysa nasıl açılır.
