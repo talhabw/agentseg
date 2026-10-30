@@ -1,0 +1,14 @@
+{"ts": 1793367380.1102858, "argv": ["status"], "exit": 0, "seconds": 0.04}
+{"ts": 1793367384.856564, "argv": ["status"], "exit": 0, "seconds": 0.04}
+{"ts": 1793367387.794536, "argv": ["project", "open", "/tmp/autoseg_trial/torpedo/images"], "exit": 0, "seconds": 0.19}
+{"ts": 1793367387.8764966, "argv": ["track", "list"], "exit": 0, "seconds": 0.02}
+{"ts": 1793367391.92926, "argv": ["sheet"], "exit": 0, "seconds": 1.43}
+{"ts": 1793367394.9554253, "argv": ["view", "22", "--grid"], "exit": 0, "seconds": 0.07}
+{"ts": 1793367397.7014632, "argv": ["segment", "22", "--box", "163,172,390,388", "--no-grid"], "exit": 0, "seconds": 0.15}
+{"ts": 1793367401.2689822, "argv": ["track", "create", "--label", "torpedo_board", "--preview", "8c67095c7e1c4ef3"], "exit": 0, "seconds": 0.04}
+{"ts": 1793367456.3909311, "argv": ["track", "propagate", "1"], "exit": 0, "seconds": 55.06}
+{"ts": 1793367458.6961715, "argv": ["sheet", "--track", "1", "--frames", "9,217,414,440,300,359,472,525"], "exit": 0, "seconds": 0.53}
+{"ts": 1793367463.5432856, "argv": ["view", "525", "--track", "1"], "exit": 0, "seconds": 0.07}
+{"ts": 1793367463.6685147, "argv": ["view", "440", "--track", "1"], "exit": 0, "seconds": 0.07}
+{"ts": 1793367467.9417906, "argv": ["sheet", "--track", "1"], "exit": 0, "seconds": 1.47}
+{"ts": 1793367468.0826726, "argv": ["export"], "exit": 0, "seconds": 0.08}

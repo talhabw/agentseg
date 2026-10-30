@@ -1,0 +1,88 @@
+{
+  "sequence": "exit",
+  "export_dir": "/tmp/autoseg_trial/exit/export/labels/train",
+  "score": {
+    "frames": 526,
+    "gt_frames": 438,
+    "gt_empty_frames": 88,
+    "mean_iou": 0.1206,
+    "hit_rate": 0.0708,
+    "good_rate": 0.0068,
+    "absent_acc": 0.0,
+    "bad_frames": 523,
+    "missing_label_files": 0,
+    "bad_examples": [
+      "000003",
+      "000004",
+      "000005",
+      "000006",
+      "000007",
+      "000008",
+      "000009",
+      "000010",
+      "000011",
+      "000012",
+      "000013",
+      "000014",
+      "000015",
+      "000016",
+      "000017",
+      "000018",
+      "000019",
+      "000020",
+      "000021",
+      "000022"
+    ]
+  },
+  "cli_calls": {
+    "status": 2,
+    "project": 1,
+    "sheet": 4,
+    "view": 2,
+    "segment": 1,
+    "track": 2,
+    "export": 1
+  },
+  "png_images_opened": 7,
+  "wall_seconds": 100.66,
+  "tokens": {
+    "input_tokens": 36,
+    "cache_creation_input_tokens": 25430,
+    "cache_read_input_tokens": 459891,
+    "output_tokens": 3389,
+    "output_tokens_details": {
+      "thinking_tokens": 437
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 25430,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [
+      {
+        "input_tokens": 2,
+        "output_tokens": 855,
+        "cache_read_input_tokens": 35827,
+        "cache_creation_input_tokens": 382,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 382
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "cost_usd": 0.1819749,
+  "final_message": "Torpido panosunu etiketledim ve YOLO-seg olarak export ettim. 526 karenin hepsi için görüntü ve etiket dosyası var, doğrulama hatası yok.\n\n- **Track:** id 1, etiket `torpedo_board`. Proje `/tmp/autoseg_trial/exit/state/projects/exit` altında.\n- **Keyframe:** yalnızca kare 308. Pano orada büyük ve net. Maske yalnızca beyaz panoyu kapsıyor, ayakları dışarıda bıraktım.\n- **Absent aralığı:** hiç işaretlemedim. Pano kadraj dışındayken backend zaten boş maske üretti: yaklaşık 21–57, 76–86, 103–151, 165–176 ve 196–216 aralıklarında. O kareleri örnekleyerek kontrol ettim, hepsinde pano gerçekten yoktu. Aralıkların her karesine tek tek bakmadım.\n- **Yok sayılan sorunlar (8'i de):**\n  - 1–6 (kare 21–216, `lost`): pano kadraja girip çıkıyor. Görünen karelerde maske doğru, görünmeyenlerde boş.\n  - 7 (kare 237–241, `exit`) ve 8 (kare 524–525, `exit`): pano sol kenardan çıkıyor. 524–525'te kenarda gerçek bir dilim görünüyor, bu yüzden maske yerinde.\n- **Çözülmemiş sorun:** yok. Hiç `refine` yapmadım.\n- **Export:** `/tmp/autoseg_trial/exit/export`. Ayrı bir val bölümü yok, 526'sı da train.\n- **Uyarı:** 63 anotasyon (%12) poligon yerine bbox dikdörtgeni olarak yazıldı. Bunların hangi kareler olduğuna bakmadım. Muhtemelen kenardaki ince dilimler.\n- **Son sheet:** `/tmp/autoseg_trial/exit/state/views/sheet_t1_f20-525_24.png`. Bu, sorunlu kareleri seçerek çıkardığım 24 karelik sheet. Tüm diziyi kapsayan bir sheet çıkarmadım.",
+  "human_interventions": 0,
+  "claude_exit": 0,
+  "transcript": "/tmp/autoseg_trial/exit/transcript.jsonl",
+  "final_sheet": "/tmp/autoseg_trial/exit/state/views/sheet_t1_f20-525_24.png"
+}
