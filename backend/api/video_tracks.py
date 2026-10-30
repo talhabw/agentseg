@@ -185,6 +185,14 @@ _JOBS: dict[str, VideoTrackJob] = {}
 _JOBS_LOCK = threading.RLock()
 
 
+def close_engine_for_db(db_path: str) -> None:
+    """Release the SAM session when a project is closed or replaced."""
+    with _ENGINE_LOCK:
+        eng = _ENGINES.pop(db_path, None)
+        if eng is not None:
+            eng.close()
+
+
 def _client() -> Sam3Client:
     return Sam3Client(os.getenv("SAM_SERVER_URL", "http://localhost:8770"))
 
