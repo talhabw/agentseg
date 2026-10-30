@@ -149,7 +149,9 @@ class VideoTrackJob:
                 self.emit("stopped")
                 return
 
-            health, issues = assess(self.engine, self.track_id, HealthConfig.geometry_only())
+            embed = _embedder(self.engine)
+            health, issues = assess(self.engine, self.track_id,
+                                    HealthConfig() if embed is not None else HealthConfig.geometry_only(), embed)
             health_by_frame = {h.frame: h for h in health}
             # A frame is approved only when health says ok; keyframe/absent are
             # deliberately excluded from the propagated table.
@@ -191,6 +193,40 @@ def close_engine_for_db(db_path: str) -> None:
         eng = _ENGINES.pop(db_path, None)
         if eng is not None:
             eng.close()
+
+
+def close_stale_sessions() -> None:
+    """Close sam3 sessions left behind by a previous backend process.
+
+    Only enabled when this backend is the sole client of the sam_server
+    (``autoseg up`` sets VIDEO_CLOSE_STALE_SESSIONS=1); a killed backend
+    otherwise leaks several GB of VRAM until the server-side expiry.
+    """
+    try:
+        c = _client()
+        stale = (c.info().get("video_sessions") or {}).get(c.model, [])
+        for sid in stale:
+            c.close_session(sid)
+        if stale:
+            print(f"Closed {len(stale)} stale sam3 session(s)")
+    except Exception as exc:
+        print(f"Warning: could not close stale sam3 sessions: {exc}")
+
+
+def _embedder(engine: TrackEngine):
+    """DINO similarity for health checks (tuned default); VIDEO_HEALTH_DINO=0 falls back to geometry only."""
+    if os.getenv("VIDEO_HEALTH_DINO", "1") == "0":
+        return None
+    emb = getattr(engine, "_video_embedder", None)
+    if emb is None:
+        try:
+            from ml.sam3_video.health import DinoEmbedder
+            emb = DinoEmbedder(engine.frames.paths)
+        except Exception as exc:  # pragma: no cover - missing weights / GPU
+            print(f"Warning: DINO health disabled: {exc}")
+            return None
+        engine._video_embedder = emb
+    return emb
 
 
 def _client() -> Sam3Client:
@@ -241,6 +277,12 @@ def _keyframe_dirty_range(engine: TrackEngine, track_id: int, frame: int) -> tup
     lo = ((positives[pos - 1] + frame) // 2 + 1) if pos else 0
     hi = ((frame + positives[pos + 1]) // 2) if pos + 1 < len(positives) else engine.num_frames - 1
     return lo, hi
+
+
+def _mark_dirty(engine: TrackEngine, lo: int, hi: int) -> None:
+    """Widen the pending regeneration range so batched edits are all re-propagated."""
+    cur = getattr(engine, "_video_dirty_range", None)
+    engine._video_dirty_range = (lo, hi) if cur is None else (min(cur[0], lo), max(cur[1], hi))
 
 
 def _get_preview(pid: str) -> Preview:
@@ -335,7 +377,7 @@ def create_video_track(req: CreateTrackRequest):
     if track.id not in eng.tracks:
         eng.add_track(track.id)
     eng.add_keyframe(track.id, p.frame, p.mask, source="sam")
-    eng._video_dirty_range = (0, eng.num_frames - 1)
+    _mark_dirty(eng, 0, eng.num_frames - 1)
     return {"track_id": track.id, "keyframe": {"frame": p.frame, "annotation_id": ann.id,
             "bbox": p.bbox, "area": mask_area(p.mask)}, "label_id": label.id}
 
@@ -421,7 +463,7 @@ def add_video_keyframe(track_id: int, req: KeyframeRequest):
                                   confidence=float(score), mask_rle=mask_to_rle(mask),
                                   polygon_norm=mask_to_yolo_polygon(mask, image.width, image.height), track_id=track_id)
     eng.add_keyframe(track_id, req.frame, mask, source="sam")
-    eng._video_dirty_range = _keyframe_dirty_range(eng, track_id, req.frame)
+    _mark_dirty(eng, *_keyframe_dirty_range(eng, track_id, req.frame))
     return {"track_id": track_id, "frame": req.frame, "annotation_id": ann.id, "score": float(score),
             "bbox": mask_to_bbox(mask)}
 
@@ -432,7 +474,7 @@ def remove_video_keyframe(track_id: int, frame: int):
     if frame not in eng.track(track_id).keyframes:
         raise HTTPException(404, "Keyframe not found")
     eng.remove_keyframe(track_id, frame)
-    eng._video_dirty_range = (0, eng.num_frames - 1)
+    _mark_dirty(eng, 0, eng.num_frames - 1)
     store = get_store()
     for ann, img in store.list_track_annotations(track_id):
         if img.order_index == frame and ann.source != "propagated":
@@ -451,8 +493,12 @@ def mark_track_absent(track_id: int, req: AbsentRequest):
     except (ValueError, IndexError) as exc:
         raise HTTPException(400, str(exc))
     store = get_store(); store.add_track_absences(track_id, frames)
-    store.delete_propagated_annotations(track_id, min(frames), max(frames))
-    eng._video_dirty_range = (min(frames), max(frames))
+    fs = sorted(set(frames)); run_start = fs[0]
+    for prev, cur in zip(fs, fs[1:] + [None]):
+        if cur != prev + 1:  # only the listed frames, not everything between them
+            store.delete_propagated_annotations(track_id, run_start, prev)
+            run_start = cur
+    _mark_dirty(eng, min(frames), max(frames))
     return {"track_id": track_id, "frames": sorted(set(frames)), "status": "absent"}
 
 
@@ -475,26 +521,36 @@ def list_video_tracks():
     return out
 
 
+def _mask_layer(m: np.ndarray, rgb: tuple[int, int, int]) -> Image.Image:
+    inner = m.copy()
+    inner[1:, :] &= m[:-1, :]; inner[:-1, :] &= m[1:, :]; inner[:, 1:] &= m[:, :-1]; inner[:, :-1] &= m[:, 1:]
+    edge = m & ~inner
+    edge = edge | np.roll(edge, 1, 0) | np.roll(edge, 1, 1)
+    a = np.zeros((m.shape[0], m.shape[1], 4), np.uint8)
+    a[m] = (*rgb, 90)
+    a[edge & m] = (*rgb, 255)
+    return Image.fromarray(a, "RGBA")
+
+
 def _overlay(path: str, track_id: Optional[int], frame: int, grid: bool, preview_id: Optional[str]):
     base = Image.open(path).convert("RGBA")
     store = get_store(); anns = store.list_annotations(_image_for_frame(frame).id)
     if track_id is not None:
         anns = [a for a in anns if a.track_id == track_id]
     overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
-    colors = [(40, 180, 255, 100), (255, 90, 80, 100), (100, 230, 120, 100)]
+    # High-contrast against water/sky blues; a solid outline makes scope errors obvious.
+    colors = [(255, 0, 200), (255, 120, 0), (120, 255, 0)]
     for i, ann in enumerate(anns):
         if not ann.mask_rle:
             continue
-        m = rle_to_mask(ann.mask_rle).astype(bool)
-        a = np.zeros((m.shape[0], m.shape[1], 4), np.uint8); a[m] = colors[i % len(colors)]
-        overlay = Image.alpha_composite(overlay, Image.fromarray(a, "RGBA"))
+        overlay = Image.alpha_composite(overlay, _mask_layer(rle_to_mask(ann.mask_rle).astype(bool),
+                                                             colors[i % len(colors)]))
     if preview_id:
-        p = _get_preview(preview_id); m = p.mask
-        a = np.zeros((m.shape[0], m.shape[1], 4), np.uint8); a[m] = (255, 220, 20, 130)
-        overlay = Image.alpha_composite(overlay, Image.fromarray(a, "RGBA"))
+        overlay = Image.alpha_composite(overlay, _mask_layer(_get_preview(preview_id).mask, (255, 220, 20)))
     out = Image.alpha_composite(base, overlay)
     d = ImageDraw.Draw(out)
-    d.rectangle((4, 4, 180, 28), fill=(0, 0, 0, 170)); d.text((8, 8), f"frame {frame}", fill="white")
+    d.rectangle((4, out.height - 28, 110, out.height - 4), fill=(0, 0, 0, 170))
+    d.text((8, out.height - 24), f"frame {frame}", fill="white")
     for ann in anns:
         if ann.bbox_xyxy:
             b = ann.bbox_xyxy; col = "yellow" if ann.source != "propagated" else "cyan"
@@ -513,11 +569,28 @@ def render_frame(frame: int, track_id: Optional[int] = None, grid: bool = False,
     return Response(_overlay(image.path, track_id, frame, grid, preview_id), media_type="image/png")
 
 
+_SHEET_COLORS = {"keyframe": (255, 220, 20), "ok": (60, 200, 90), "review": (255, 140, 0),
+                 "absent": (150, 150, 150), "empty": (230, 50, 50)}
+
+
+def _frame_statuses(track_id: int) -> dict[int, str]:
+    """keyframe | ok | review | absent per frame; frames without a mask are missing."""
+    store = get_store()
+    out = {f: "absent" for f in store.list_track_absences(track_id)}
+    for ann, img in store.list_track_annotations(track_id):
+        if ann.source != "propagated":
+            out[img.order_index] = "keyframe"
+        elif img.order_index not in out:
+            out[img.order_index] = "ok" if ann.status == "approved" else "review"
+    return out
+
+
 @router.get("/render/sheet")
 def render_sheet(track_id: Optional[int] = None, every: int = Query(10, ge=1), frames: Optional[str] = None,
                  grid: bool = False):
     n = get_store().get_image_count(get_project().id)
     selected = sorted({int(x) for x in frames.split(",")}) if frames else list(range(0, n, every))
+    statuses = _frame_statuses(track_id) if track_id is not None else {}
     thumbs = []
     for f in selected:
         if 0 <= f < n:
@@ -528,5 +601,14 @@ def render_sheet(track_id: Optional[int] = None, every: int = Query(10, ge=1), f
     d = ImageDraw.Draw(sheet)
     for i, (f, im) in enumerate(thumbs):
         x, y = (i % cols) * cell_w, (i // cols) * cell_h
-        sheet.paste(im, (x, y + 22)); d.text((x + 5, y + 4), f"frame {f}", fill="white")
+        sheet.paste(im, (x, y + 22))
+        label = f"frame {f}"
+        if track_id is not None:
+            st = statuses.get(f, "empty")
+            col = _SHEET_COLORS[st]
+            d.rectangle((x, y + 22, x + im.width - 1, y + 22 + im.height - 1), outline=col, width=4)
+            label += f"  {st}"
+            d.text((x + 5, y + 4), label, fill=col)
+        else:
+            d.text((x + 5, y + 4), label, fill="white")
     buf = io.BytesIO(); sheet.save(buf, format="PNG"); return Response(buf.getvalue(), media_type="image/png")

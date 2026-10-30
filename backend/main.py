@@ -4,6 +4,7 @@ FastAPI application entry point
 
 import sys
 import logging
+import os
 import traceback
 from pathlib import Path
 
@@ -30,6 +31,9 @@ async def lifespan(app: FastAPI):
     """Application lifespan events."""
     # Startup
     logger.info("AutoSeg API starting...")
+    if os.getenv("VIDEO_CLOSE_STALE_SESSIONS") == "1":
+        from backend.api.video_tracks import close_stale_sessions
+        close_stale_sessions()
     yield
     # Shutdown
     logger.info("AutoSeg API shutting down...")

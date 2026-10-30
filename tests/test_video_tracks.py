@@ -30,6 +30,7 @@ def test_video_track_lifecycle(tmp_path, monkeypatch):
     projects_api._current_store = store
     fake = FakeSam3Client(5, 24, 32, dx=0)
     monkeypatch.setattr(video_api, "_client", lambda: fake)
+    monkeypatch.setenv("VIDEO_HEALTH_DINO", "0")
     # A fresh registry avoids leaking a session between tests.
     video_api._ENGINES.clear()
     video_api._JOBS.clear()
