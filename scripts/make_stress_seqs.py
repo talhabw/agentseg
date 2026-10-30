@@ -40,7 +40,8 @@ def write_seq(name, indices, transforms, rows):
     if vis/orig>=.15: outbs.append(yolo([x1,y1,x2,y2],cw,ch))
   elif t=='occlusion':
    out=img.copy(); b=bs[0] if bs else None
-   if b:
+   if b and transforms['coverage'][j]==0: outbs=[b]
+   elif b:
     x1,y1,x2,y2=xyxy(b,w,h); frac=transforms['coverage'][j]; pw=int((x2-x1)*math.sqrt(frac)); ph=int((y2-y1)*math.sqrt(frac)); x=max(x1,x2-pw); y=max(y1,y2-ph); rng=np.random.default_rng(SEED+j); out[y:y+ph,x:x+pw]=rng.integers(0,256,(ph,pw,3),dtype=np.uint8)
     if frac<.9: outbs=[b]
   else: outbs=bs
@@ -71,8 +72,8 @@ def main():
  for j in range(n):
   phase=j/(n-1); shift=math.sin(phase*2*math.pi)*w*.55; centers.append([w/2+shift,h/2])
  stats['exit']=write_seq('exit',list(range(n)),{'type':'crop','crop_w':crop_w,'crop_h':crop_h,'centers':centers,'pan':'sinusoidal; object exits and returns'},rows)
- cov=[.6+ .4*(1-abs(j-10)/10) if j<=20 else .6 for j in range(n)]
- stats['occl']=write_seq('occl',list(range(n)),{'type':'occlusion','span':[0,19],'coverage':cov,'policy':'drop label when coverage >= 90%; deterministic noise patch'},rows)
+ o0=200; cov=[.6+.4*(1-abs(j-o0-9.5)/9.5) if o0<=j<o0+20 else 0. for j in range(n)]
+ stats['occl']=write_seq('occl',list(range(n)),{'type':'occlusion','span':[o0,o0+19],'coverage':cov,'policy':'drop label when coverage >= 90%; deterministic noise patch'},rows)
  stats['mid']=write_seq('mid',list(range(n)),{'type':'identity','prompt_frame':mid},rows)
  print(json.dumps(stats))
 if __name__=='__main__': main()
