@@ -44,10 +44,12 @@ SCORE_JSON="$RUN_DIR/score.json"
 MAPPED_GT="$RUN_DIR/gt_mapped"
 mkdir -p "$MAPPED_GT"
 .venv/bin/python - "$GT_DIR" "$MAPPED_GT" <<'PY'
-import shutil, sys
+import re, shutil, sys
 from pathlib import Path
 src, dst = Path(sys.argv[1]), Path(sys.argv[2])
-for i, p in enumerate(sorted(src.glob('*.txt')), 1):
+# Natural order, like the project import (0, 1, 2, ..., 10), not lexicographic (0, 1, 10, 100).
+key = lambda p: [int(t) if t.isdigit() else t for t in re.split(r'(\d+)', p.name)]
+for i, p in enumerate(sorted(src.glob('*.txt'), key=key), 1):
     shutil.copy2(p, dst / f'{i:06d}.txt')
 PY
 .venv/bin/python "$ROOT/scripts/score_export.py" "$EXPORT_DIR" "$MAPPED_GT" --json "$SCORE_JSON" >/tmp/autoseg_trial_${SEQ}_score.json || true
