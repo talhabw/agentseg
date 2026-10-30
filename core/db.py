@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 # Current schema version
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def get_connection(db_path: str) -> sqlite3.Connection:
@@ -96,6 +96,7 @@ def init_db(db_path: str) -> None:
                 status TEXT DEFAULT 'approved',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                track_id INTEGER REFERENCES tracks(id) ON DELETE SET NULL,
                 FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE,
                 FOREIGN KEY (label_id) REFERENCES labels(id) ON DELETE CASCADE
             )
@@ -106,6 +107,9 @@ def init_db(db_path: str) -> None:
             CREATE INDEX IF NOT EXISTS idx_annotations_image 
             ON annotations(image_id)
         """)
+
+        # Object identity (v2): tracks + annotations.track_id
+        _create_tracks_schema(cursor)
         
         # Key-value store for settings, last open image, etc.
         cursor.execute("""
@@ -156,13 +160,60 @@ def migrate_db(db_path: str) -> None:
             if current_version < 1:
                 init_db(db_path)
             
-            # Future migrations would go here:
-            # if current_version < 2:
-            #     _migrate_v1_to_v2(conn)
-            
+            if current_version < 2:
+                _migrate_v1_to_v2(conn)
+
             conn.commit()
         finally:
             conn.close()
+
+
+TRACK_STATUSES = ("active", "lost", "ended")
+
+
+def _create_tracks_schema(cursor) -> None:
+    """Create the tracks table and track indexes (idempotent).
+
+    Assumes annotations.track_id exists (either in CREATE TABLE or added by
+    the v1->v2 migration).
+    """
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tracks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            label_id INTEGER NOT NULL,
+            name TEXT,
+            notes TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            lost_at_image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+            FOREIGN KEY (label_id) REFERENCES labels(id) ON DELETE CASCADE
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tracks_project ON tracks(project_id)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_annotations_track ON annotations(track_id)"
+    )
+
+
+def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
+    """v1 -> v2: add tracks table and nullable annotations.track_id.
+
+    Existing annotations keep track_id = NULL (no identity); new initial
+    labels get tracks going forward.
+    """
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(annotations)")}
+    if "track_id" not in cols:
+        conn.execute(
+            "ALTER TABLE annotations ADD COLUMN track_id INTEGER "
+            "REFERENCES tracks(id) ON DELETE SET NULL"
+        )
+    _create_tracks_schema(conn.cursor())
+    conn.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (2)")
 
 
 def _set_kv(conn: sqlite3.Connection, key: str, value: str) -> None:

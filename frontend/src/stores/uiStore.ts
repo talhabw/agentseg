@@ -21,6 +21,7 @@ interface PerformanceProgress {
   startTime: number;
   failedImageIndex: number | null;
   failedLabels: string[];
+  performance: boolean; // full-screen overlay + frozen canvas (performance mode)
 }
 
 interface UIState {
@@ -152,7 +153,7 @@ export const useUIStore = create<UIState>()(
       maskOpacity: 0.5,
       sizeMinRatio: 0.5, // Min allowed size ratio (0.5x)
       sizeMaxRatio: 2.0, // Max allowed size ratio (2.0x)
-      stopOnSizeMismatch: true,  // Default: stop on size mismatch (safer)
+      stopOnSizeMismatch: false,  // Size change -> needs_review, keep tracking (issue #5)
       topK: 5, // Try 5 peak candidates by default
       useBBoxHint: true, // Default: use bbox hints to keep tracking localized
       bboxHintScale: 1.15, // Slightly padded hint to keep SAM localized during tracking
@@ -382,6 +383,13 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: STORAGE_KEY,
+      // v1 (issue #5): size change no longer stops tracking by default
+      version: 1,
+      migrate: (persisted, version) => {
+        const state = (persisted ?? {}) as Partial<UIState>;
+        if (version < 1) state.stopOnSizeMismatch = false;
+        return state as UIState;
+      },
       // Only persist these specific fields
       partialize: (state) => ({
         lastProjectPath: state.lastProjectPath,

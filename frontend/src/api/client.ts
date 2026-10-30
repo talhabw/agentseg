@@ -9,6 +9,10 @@ import type {
   FindAllInstancesResult,
   PropagateAdvancedResult,
   PropagationMode,
+  Track,
+  TrackingJob,
+  TrackingJobEvent,
+  TrackingJobRequest,
 } from '../types';
 
 const api = axios.create({
@@ -215,6 +219,7 @@ export async function createAnnotation(data: {
   status?: string;
   mask_rle?: object;
   polygon?: number[];
+  track_id?: number | null;  // omit for new initial labels -> backend creates a new track
 }): Promise<Annotation> {
   const response = await api.post<Annotation>('/annotations', data);
   return response.data;
@@ -228,6 +233,8 @@ export async function updateAnnotation(
     polygon: number[];
     mask_rle: object;
     status: string;
+    track_id: number;
+    clear_track: boolean;
   }>
 ): Promise<Annotation> {
   const response = await api.put<Annotation>(`/annotations/${annotationId}`, data);
@@ -264,15 +271,49 @@ export async function findFallbackReference(
   labelId: number,
   beforeImageIndex: number,
   projectId: number,
-  excludeImageIds?: number[]
+  excludeImageIds?: number[],
+  trackId?: number | null  // restrict to this object's anchors (#4)
 ): Promise<FallbackReferenceResult> {
   const response = await api.get<FallbackReferenceResult>(`/annotations/fallback/${labelId}`, {
     params: {
       before_image_index: beforeImageIndex,
       project_id: projectId,
       exclude_image_ids: excludeImageIds?.join(','),
+      track_id: trackId ?? undefined,
     },
   });
+  return response.data;
+}
+
+// ==================== Tracks (object identity, #4) ====================
+
+export async function listTracks(params?: { label_id?: number; status?: string }): Promise<Track[]> {
+  const response = await api.get<Track[]>('/tracks', { params });
+  return response.data;
+}
+
+export async function getTrackAnnotations(
+  trackId: number
+): Promise<Array<{ image_id: number; image_index: number; annotation: Annotation }>> {
+  const response = await api.get(`/tracks/${trackId}/annotations`);
+  return response.data;
+}
+
+export async function markTrackLost(trackId: number, imageId?: number): Promise<Track> {
+  const response = await api.post<Track>(`/tracks/${trackId}/lost`, { image_id: imageId ?? null });
+  return response.data;
+}
+
+export async function markTrackEnded(trackId: number): Promise<Track> {
+  const response = await api.post<Track>(`/tracks/${trackId}/end`);
+  return response.data;
+}
+
+export async function reanchorTrack(
+  trackId: number,
+  data: { image_id: number; annotation_id?: number; bbox?: number[]; mask_rle?: object; polygon?: number[] }
+): Promise<Annotation> {
+  const response = await api.post<Annotation>(`/tracks/${trackId}/reanchor`, data);
   return response.data;
 }
 
@@ -383,9 +424,9 @@ export async function propagate(
   sourceImageId: number,
   targetImageId: number,
   sourceAnnotationId: number,
-  sizeMinRatio: number = 0.8,
-  sizeMaxRatio: number = 1.2,
-  stopOnSizeMismatch: boolean = true,
+  sizeMinRatio: number = 0.5,
+  sizeMaxRatio: number = 2.0,
+  stopOnSizeMismatch: boolean = false,
   skipDuplicateThreshold: number = 0.9,
   topK: number = 5,
   useBBoxHint: boolean = true,
@@ -475,9 +516,9 @@ export async function propagateAdvanced(
     use_bbox_hint: options.useBBoxHint ?? true,
     bbox_hint_scale: options.bboxHintScale ?? 1.15,
     prune_thin_artifacts: options.pruneThinArtifacts ?? true,
-    size_min_ratio: options.sizeMinRatio ?? 0.8,
-    size_max_ratio: options.sizeMaxRatio ?? 1.2,
-    stop_on_size_mismatch: options.stopOnSizeMismatch ?? true,
+    size_min_ratio: options.sizeMinRatio ?? 0.5,
+    size_max_ratio: options.sizeMaxRatio ?? 2.0,
+    stop_on_size_mismatch: options.stopOnSizeMismatch ?? false,
     top_k: options.topK ?? 5,
     skip_duplicate_threshold: options.skipDuplicateThreshold ?? 0.9,
   });
@@ -575,6 +616,104 @@ export async function listDirectory(path: string, dirsOnly = true): Promise<Dire
 export async function getHomeDirectory(): Promise<{ path: string }> {
   const response = await api.get<{ path: string }>('/files/home');
   return response.data;
+}
+
+// ==================== Tracking jobs (backend orchestration, #3) ====================
+
+export async function startTrackingJob(req: TrackingJobRequest): Promise<TrackingJob> {
+  const response = await api.post<TrackingJob>('/track/jobs', req);
+  return response.data;
+}
+
+export async function getTrackingJob(jobId: string): Promise<TrackingJob> {
+  const response = await api.get<TrackingJob>(`/track/jobs/${jobId}`);
+  return response.data;
+}
+
+export async function getActiveTrackingJob(): Promise<TrackingJob | null> {
+  const response = await api.get<TrackingJob[]>('/track/jobs', { params: { active: true } });
+  return response.data[0] ?? null;
+}
+
+export async function stopTrackingJob(jobId: string): Promise<TrackingJob> {
+  const response = await api.post<TrackingJob>(`/track/jobs/${jobId}/stop`);
+  return response.data;
+}
+
+export async function resumeTrackingJob(jobId: string): Promise<TrackingJob> {
+  const response = await api.post<TrackingJob>(`/track/jobs/${jobId}/resume`);
+  return response.data;
+}
+
+export async function getTrackingJobEvents(
+  jobId: string,
+  after = 0,
+  wait = 0,
+): Promise<{ events: TrackingJobEvent[]; status: string; last_seq: number }> {
+  const response = await api.get(`/track/jobs/${jobId}/events`, { params: { after, wait } });
+  return response.data;
+}
+
+const TRACKING_EVENT_TYPES: TrackingJobEvent['type'][] = [
+  'started', 'frame_done', 'uncertain', 'possible_id_switch', 'object_lost',
+  'paused_waiting_for_label', 'reanchored', 'object_resumed', 'resumed', 'finished', 'error',
+];
+
+/**
+ * Follow a job's events via SSE, falling back to long-polling if SSE fails.
+ * Returns an unsubscribe function. Stops after `finished` / `error`.
+ */
+export function subscribeTrackingJob(
+  jobId: string,
+  onEvent: (ev: TrackingJobEvent) => void,
+  after = 0,
+): () => void {
+  let closed = false;
+  let lastSeq = after;
+  let source: EventSource | null = null;
+
+  const deliver = (ev: TrackingJobEvent) => {
+    if (closed || ev.seq <= lastSeq) return;
+    lastSeq = ev.seq;
+    onEvent(ev);
+    if (ev.type === 'finished' || ev.type === 'error') close();
+  };
+
+  const poll = async () => {
+    while (!closed) {
+      try {
+        const res = await getTrackingJobEvents(jobId, lastSeq, 10);
+        res.events.forEach(deliver);
+        if (!closed && res.events.length === 0 && !['running', 'paused', 'pending'].includes(res.status)) {
+          close();
+        }
+      } catch {
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+  };
+
+  const close = () => {
+    closed = true;
+    source?.close();
+  };
+
+  if (typeof EventSource !== 'undefined') {
+    source = new EventSource(`/api/track/jobs/${jobId}/stream?after=${after}`);
+    for (const type of TRACKING_EVENT_TYPES) {
+      source.addEventListener(type, (e) => deliver(JSON.parse((e as MessageEvent).data)));
+    }
+    source.onerror = () => {
+      // Server closes the stream after the last event; otherwise switch to polling.
+      if (closed) return;
+      source?.close();
+      source = null;
+      void poll();
+    };
+  } else {
+    void poll();
+  }
+  return close;
 }
 
 export default api;

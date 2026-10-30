@@ -17,6 +17,7 @@ from core.models import (
     Label,
     ImageRecord,
     Annotation,
+    Track,
     bbox_to_json,
     polygon_to_json,
     mask_rle_to_json,
@@ -549,6 +550,7 @@ class ProjectStore:
         confidence: Optional[float] = None,
         mask_rle: Optional[dict] = None,
         polygon_norm: Optional[list[float]] = None,
+        track_id: Optional[int] = None,
     ) -> Annotation:
         """
         Create a new annotation.
@@ -569,8 +571,8 @@ class ProjectStore:
         cursor = self.conn.execute(
             """
             INSERT INTO annotations 
-            (image_id, label_id, bbox_xyxy_json, source, status, confidence, mask_rle_json, polygon_norm_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (image_id, label_id, bbox_xyxy_json, source, status, confidence, mask_rle_json, polygon_norm_json, track_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 image_id,
@@ -581,6 +583,7 @@ class ProjectStore:
                 confidence,
                 mask_rle_to_json(mask_rle) if mask_rle else None,
                 polygon_to_json(polygon_norm) if polygon_norm else None,
+                track_id,
             ),
         )
         self.commit()
@@ -607,6 +610,7 @@ class ProjectStore:
             "source",
             "status",
             "confidence",
+            "track_id",
         }
 
         updates = []
@@ -713,7 +717,10 @@ class ProjectStore:
         """
         cursor = self.conn.execute(
             """
-            SELECT a.*, i.* FROM annotations a
+            SELECT a.*, i.id AS img_id, i.project_id AS img_project_id,
+                   i.path AS img_path, i.width AS img_width, i.height AS img_height,
+                   i.order_index AS img_order_index
+            FROM annotations a
             JOIN images i ON a.image_id = i.id
             WHERE i.project_id = ? AND a.status = ?
             ORDER BY i.order_index, a.id
@@ -723,31 +730,14 @@ class ProjectStore:
 
         results = []
         for row in cursor.fetchall():
-            # Split row into annotation and image parts
-            ann = Annotation(
-                id=row["id"],
-                image_id=row["image_id"],
-                label_id=row["label_id"],
-                bbox_xyxy_json=row["bbox_xyxy_json"],
-                polygon_norm_json=row["polygon_norm_json"],
-                mask_rle_json=row["mask_rle_json"],
-                source=row["source"],
-                confidence=row["confidence"],
-                status=row["status"],
-                created_at=datetime.fromisoformat(row["created_at"])
-                if row["created_at"]
-                else None,
-                updated_at=datetime.fromisoformat(row["updated_at"])
-                if row["updated_at"]
-                else None,
-            )
+            ann = self._row_to_annotation(row)
             img = ImageRecord(
-                id=row[11],  # After annotation fields
-                project_id=row[12],
-                path=row[13],
-                width=row[14],
-                height=row[15],
-                order_index=row[16],
+                id=row["img_id"],
+                project_id=row["img_project_id"],
+                path=row["img_path"],
+                width=row["img_width"],
+                height=row["img_height"],
+                order_index=row["img_order_index"],
             )
             results.append((ann, img))
 
@@ -798,6 +788,153 @@ class ProjectStore:
             source=row["source"],
             confidence=row["confidence"],
             status=row["status"],
+            created_at=datetime.fromisoformat(row["created_at"])
+            if row["created_at"]
+            else None,
+            updated_at=datetime.fromisoformat(row["updated_at"])
+            if row["updated_at"]
+            else None,
+            track_id=row["track_id"] if "track_id" in row.keys() else None,
+        )
+
+    # ==================== Track Operations ====================
+
+    def create_track(
+        self,
+        project_id: int,
+        label_id: int,
+        name: Optional[str] = None,
+        notes: Optional[str] = None,
+        status: str = "active",
+    ) -> Track:
+        """Create a new track (object identity)."""
+        cursor = self.conn.execute(
+            "INSERT INTO tracks (project_id, label_id, name, notes, status) VALUES (?, ?, ?, ?, ?)",
+            (project_id, label_id, name, notes, status),
+        )
+        self.commit()
+        return self.get_track(cursor.lastrowid)
+
+    def get_track(self, track_id: int) -> Optional[Track]:
+        row = self.conn.execute(
+            "SELECT * FROM tracks WHERE id = ?", (track_id,)
+        ).fetchone()
+        return self._row_to_track(row) if row else None
+
+    def list_tracks(
+        self,
+        project_id: int,
+        label_id: Optional[int] = None,
+        status: Optional[str] = None,
+    ) -> list[Track]:
+        query = "SELECT * FROM tracks WHERE project_id = ?"
+        params: list = [project_id]
+        if label_id is not None:
+            query += " AND label_id = ?"
+            params.append(label_id)
+        if status is not None:
+            query += " AND status = ?"
+            params.append(status)
+        query += " ORDER BY id"
+        return [self._row_to_track(r) for r in self.conn.execute(query, params)]
+
+    def update_track(self, track_id: int, **fields) -> Optional[Track]:
+        """Update track fields: name, notes, status, label_id, lost_at_image_id."""
+        allowed = {"name", "notes", "status", "label_id", "lost_at_image_id"}
+        updates, values = [], []
+        for key, value in fields.items():
+            if key in allowed:
+                updates.append(f"{key} = ?")
+                values.append(value)
+        if updates:
+            updates.append("updated_at = CURRENT_TIMESTAMP")
+            values.append(track_id)
+            self.conn.execute(
+                f"UPDATE tracks SET {', '.join(updates)} WHERE id = ?", values
+            )
+            self.commit()
+        return self.get_track(track_id)
+
+    def delete_track(self, track_id: int) -> None:
+        """Delete a track; its annotations are kept with track_id = NULL."""
+        self.conn.execute(
+            "UPDATE annotations SET track_id = NULL WHERE track_id = ?", (track_id,)
+        )
+        self.conn.execute("DELETE FROM tracks WHERE id = ?", (track_id,))
+        self.commit()
+
+    def list_track_annotations(
+        self, track_id: int
+    ) -> list[tuple[Annotation, ImageRecord]]:
+        """All annotations of a track with their images, ordered by frame."""
+        cursor = self.conn.execute(
+            """
+            SELECT a.*, i.id AS img_id, i.project_id AS img_project_id,
+                   i.path AS img_path, i.width AS img_width, i.height AS img_height,
+                   i.order_index AS img_order_index
+            FROM annotations a
+            JOIN images i ON a.image_id = i.id
+            WHERE a.track_id = ?
+            ORDER BY i.order_index, a.id
+            """,
+            (track_id,),
+        )
+        results = []
+        for row in cursor.fetchall():
+            img = ImageRecord(
+                id=row["img_id"],
+                project_id=row["img_project_id"],
+                path=row["img_path"],
+                width=row["img_width"],
+                height=row["img_height"],
+                order_index=row["img_order_index"],
+            )
+            results.append((self._row_to_annotation(row), img))
+        return results
+
+    def track_summaries(self, project_id: int) -> dict[int, dict]:
+        """Per-track aggregate stats: annotation/anchor counts and frame span."""
+        cursor = self.conn.execute(
+            """
+            SELECT a.track_id AS track_id,
+                   COUNT(*) AS annotation_count,
+                   SUM(CASE WHEN a.status = 'approved' THEN 1 ELSE 0 END) AS anchor_count,
+                   MIN(i.order_index) AS first_image_index,
+                   MAX(i.order_index) AS last_image_index
+            FROM annotations a
+            JOIN images i ON a.image_id = i.id
+            WHERE i.project_id = ? AND a.track_id IS NOT NULL
+            GROUP BY a.track_id
+            """,
+            (project_id,),
+        )
+        return {row["track_id"]: dict(row) for row in cursor.fetchall()}
+
+    def find_track_anchor(
+        self,
+        track_id: int,
+        before_image_index: Optional[int] = None,
+        exclude_image_ids: Optional[set[int]] = None,
+    ) -> Optional[tuple[Annotation, ImageRecord]]:
+        """Most recent anchor (approved) annotation of a track before a frame."""
+        excluded = exclude_image_ids or set()
+        for ann, img in reversed(self.list_track_annotations(track_id)):
+            if before_image_index is not None and img.order_index >= before_image_index:
+                continue
+            if img.id in excluded or not ann.is_anchor:
+                continue
+            return ann, img
+        return None
+
+    def _row_to_track(self, row: sqlite3.Row) -> Track:
+        return Track(
+            id=row["id"],
+            project_id=row["project_id"],
+            label_id=row["label_id"],
+            status=row["status"],
+            name=row["name"],
+            notes=row["notes"],
+            lost_at_image_id=row["lost_at_image_id"],
             created_at=datetime.fromisoformat(row["created_at"])
             if row["created_at"]
             else None,

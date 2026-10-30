@@ -38,6 +38,8 @@ export function AnnotationList() {
         return <Badge variant="outline" className="bg-green-500/15 text-green-600 border-green-500/20 hover:bg-green-500/25">✓</Badge>;
       case 'pending':
         return <Badge variant="outline" className="bg-yellow-500/15 text-yellow-600 border-yellow-500/20 hover:bg-yellow-500/25">?</Badge>;
+      case 'needs_review':
+        return <Badge variant="outline" className="bg-orange-500/15 text-orange-600 border-orange-500/20 hover:bg-orange-500/25" title="Tracking uncertain - needs review">!</Badge>;
       case 'rejected':
         return <Badge variant="outline" className="bg-red-500/15 text-red-600 border-red-500/20 hover:bg-red-500/25">✕</Badge>;
       default:
@@ -159,13 +161,14 @@ export function AnnotationList() {
   // Filter annotations based on review filter
   const filteredAnnotations = annotations.filter((ann) => {
     if (reviewFilter === 'all') return true;
+    if (reviewFilter === 'pending') return ann.status === 'pending' || ann.status === 'needs_review';
     return ann.status === reviewFilter;
   });
 
   // Count by status
   const statusCounts = {
     all: annotations.length,
-    pending: annotations.filter(a => a.status === 'pending').length,
+    pending: annotations.filter(a => a.status === 'pending' || a.status === 'needs_review').length,
     approved: annotations.filter(a => a.status === 'approved').length,
     rejected: annotations.filter(a => a.status === 'rejected').length,
   };
@@ -232,7 +235,7 @@ export function AnnotationList() {
                   variant="outline"
                   className="flex-1 bg-green-500/10 text-green-600 hover:bg-green-500/20 border-green-500/20 h-8"
                   onClick={async () => {
-                    const pending = annotations.filter(a => a.status === 'pending');
+                    const pending = annotations.filter(a => a.status === 'pending' || a.status === 'needs_review');
                     for (const ann of pending) {
                       await updateAnnotation(ann.id, { status: 'approved' });
                     }
@@ -247,7 +250,7 @@ export function AnnotationList() {
                   variant="outline"
                   className="flex-1 bg-red-500/10 text-red-600 hover:bg-red-500/20 border-red-500/20 h-8"
                   onClick={async () => {
-                    const pending = annotations.filter(a => a.status === 'pending');
+                    const pending = annotations.filter(a => a.status === 'pending' || a.status === 'needs_review');
                     for (const ann of pending) {
                       await updateAnnotation(ann.id, { status: 'rejected' });
                     }
@@ -307,6 +310,13 @@ export function AnnotationList() {
 
                   {/* Badges */}
                   <div className="flex items-center gap-1.5">
+                    {/* Track (object identity) */}
+                    {ann.track_id != null && (
+                      <span className="text-xs text-muted-foreground font-mono" title={`Track ${ann.track_id}${ann.is_anchor ? ' (anchor)' : ''}`}>
+                        T{ann.track_id}{ann.is_anchor ? '*' : ''}
+                      </span>
+                    )}
+
                     {/* Source icon */}
                     {ann.source !== 'manual' && (
                       <span className="text-xs opacity-70" title={`Source: ${ann.source}`}>
@@ -370,7 +380,7 @@ export function AnnotationList() {
                     {/* Action buttons */}
                     <div className="flex gap-2">
                       {/* Show Approve/Reject only if in Review Mode OR item is pending, to avoid clutter in manual mode */}
-                      {(reviewModeEnabled || ann.status === 'pending') && (
+                      {(reviewModeEnabled || ann.status === 'pending' || ann.status === 'needs_review') && (
                         <>
                           <Button
                             size="sm"

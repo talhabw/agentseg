@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useUIStore } from '../../stores/uiStore';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { stopAutoTracking } from '../../App';
+import { resumeTracking, stopTracking } from '../../utils/trackingRunner';
 
 export function PerformancePropagationOverlay() {
   const performanceProgress = useUIStore((s) => s.performanceProgress);
@@ -13,7 +13,6 @@ export function PerformancePropagationOverlay() {
   // Only depend on isActive, not the whole object, to avoid resetting the interval on every progress update
   useEffect(() => {
     if (!isActive) return;
-    setNow(Date.now()); // Reset clock when propagation starts
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [isActive]);
@@ -29,6 +28,7 @@ export function PerformancePropagationOverlay() {
     startTime,
     failedImageIndex,
     failedLabels,
+    performance,
   } = performanceProgress;
 
   const elapsed = (now - startTime) / 1000;
@@ -39,26 +39,27 @@ export function PerformancePropagationOverlay() {
   const isStopped = failedImageIndex !== null;
 
   const handleStop = () => {
-    stopAutoTracking();
+    void stopTracking();
     useUIStore.getState().setAutoNext(false);
-    useUIStore.getState().setPerformanceProgress(null);
   };
 
   const handleResume = () => {
-    // Clear the failed state and resume - App.tsx handles the actual propagation
-    useUIStore.getState().updatePerformanceProgress({
-      failedImageIndex: null,
-      failedLabels: [],
-    });
+    void resumeTracking();
   };
 
+  // Full-screen only while a performance-mode job runs; otherwise (normal mode,
+  // or paused waiting for a new label) a compact card so the canvas stays usable.
+  const fullScreen = performance && !isStopped;
+
   return (
-    <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center">
-      <Card className="w-[480px] shadow-2xl">
+    <div className={fullScreen
+      ? 'fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center'
+      : 'fixed bottom-4 right-4 z-[100]'}>
+      <Card className={fullScreen ? 'w-[480px] shadow-2xl' : 'w-[360px] shadow-2xl'}>
         <CardContent className="pt-6 space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">
-              {isStopped ? 'Propagation Paused' : 'Performance Propagation'}
+              {isStopped ? 'Tracking Paused' : performance ? 'Performance Tracking' : 'Tracking'}
             </h2>
             <span className="text-sm text-muted-foreground">
               {percent}%
@@ -108,7 +109,7 @@ export function PerformancePropagationOverlay() {
                 {failedLabels.join(', ')}
               </div>
               <div className="text-xs text-muted-foreground mt-1">
-                Fix annotations on this image, then resume.
+                Draw a new box for each lost object on this image (or re-anchor the track), then resume.
               </div>
             </div>
           )}
@@ -126,7 +127,7 @@ export function PerformancePropagationOverlay() {
               </>
             ) : (
               <Button variant="destructive" className="w-full" onClick={handleStop}>
-                Stop Propagation
+                Stop Tracking
               </Button>
             )}
           </div>

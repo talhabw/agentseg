@@ -20,13 +20,28 @@ from ml.embed import (
     get_available_models,
 )
 from ml.propagate import (
+    DEFAULT_MIN_SIMILARITY,
+    DEFAULT_SIZE_MAX_RATIO,
+    DEFAULT_SIZE_MIN_RATIO,
     PropagateService,
-    PropagationSizeMismatchError,
-    PropagationNotFoundError,
+    PropagationError,
+    PropagationResult,
+    update_area_trend,
 )
-from core.masks import mask_to_rle, rle_to_mask, mask_iou
+from core.masks import mask_to_rle, rle_to_mask
 from core.polygons import mask_to_yolo_polygon
 from core.store import ProjectStore
+from ml.tracking_job import (  # shared tracking rules (moved from this module, #3)
+    ANCHOR_SEARCH_MAX_IMAGES,
+    DuplicateCheck,
+    annotation_mask_area as _annotation_mask_area,
+    annotation_overlap_score as _annotation_overlap_score,
+    bbox_duplicate_score as _bbox_duplicate_score,
+    check_duplicate as _check_duplicate,
+    find_anchor_mask_area as _find_anchor_mask_area,
+    find_duplicate_annotation as _find_duplicate_annotation,
+    get_job_manager,
+)
 from backend.api.projects import get_project, get_store
 from backend.yolo_autoannotate import (
     YoloAnnotateOptions,
@@ -117,18 +132,32 @@ class PropagateRequest(BaseModel):
     use_bbox_hint: bool = True
     bbox_hint_scale: float = 1.15  # Scale applied to the tracking bbox hint
     prune_thin_artifacts: bool = True
-    size_min_ratio: float = 0.8  # Min allowed size ratio (e.g., 0.8x)
-    size_max_ratio: float = 1.2  # Max allowed size ratio (e.g., 1.2x)
-    stop_on_size_mismatch: bool = (
-        True  # If True, return None when no size-OK result; if False, use fallback
-    )
+    # Per-frame mask-area ratio band; outside -> needs_review (not lost)
+    size_min_ratio: float = DEFAULT_SIZE_MIN_RATIO
+    size_max_ratio: float = DEFAULT_SIZE_MAX_RATIO
+    # Legacy: if True, a size change raises (HTTP 400) instead of needs_review
+    stop_on_size_mismatch: bool = False
     skip_duplicate_threshold: float = (
         0.9  # Skip if IoU with existing annotation >= this (0 = disabled)
     )
     top_k: int = 5  # Number of peak candidates to try
+    min_similarity: float = DEFAULT_MIN_SIMILARITY  # below on all candidates -> lost
+    expected_area_ratio: float = 1.0  # adaptive area trend (from previous response)
+    anchor_annotation_id: Optional[int] = None  # trusted anchor; auto-lookup if None
+    use_anchor: bool = True
 
 
-class PropagateResponse(BaseModel):
+class TrackingStatusFields(BaseModel):
+    """Uncertainty fields shared by propagate responses."""
+
+    status: str = "ok"  # "ok" | "needs_review"
+    uncertain_reasons: list[str] = Field(default_factory=list)
+    signals: Optional[dict[str, Any]] = None  # TrackingSignals.to_dict()
+    # Updated area trend; pass back as expected_area_ratio on the next step
+    next_expected_area_ratio: float = 1.0
+
+
+class PropagateResponse(TrackingStatusFields):
     bbox: list[float]
     mask_rle: dict
     polygon: list[float]
@@ -142,6 +171,11 @@ class PropagateResponse(BaseModel):
     conflicting_label_name: str | None = (
         None  # If skipped due to different class at same location
     )
+    # Object identity (#4): result belongs to the source annotation's track.
+    track_id: Optional[int] = None
+    possible_id_switch: bool = False  # overlaps another track of the same label
+    conflicting_track_id: Optional[int] = None
+    conflicting_annotation_id: Optional[int] = None
 
 
 def _load_image(image_id: int) -> tuple[np.ndarray, int, int]:
@@ -159,119 +193,29 @@ def _load_image(image_id: int) -> tuple[np.ndarray, int, int]:
         raise HTTPException(status_code=500, detail=f"Failed to load image: {e}")
 
 
-def _find_duplicate_annotation(
-    store,
-    existing_annotations,
-    new_bbox: list[float],
-    new_mask: Optional[np.ndarray],
-    source_label_id: int,
-    threshold: float,
-) -> tuple[bool, float, str | None]:
-    """Find an existing annotation that is effectively the same target object.
-
-    Tracking can make multiple same-class source objects collapse onto the same
-    target object. Mask IoU alone misses bbox-only annotations. Different-label
-    conflicts stay stricter to avoid suppressing nearby legitimate classes.
-    """
-    if threshold <= 0:
-        return False, 0.0, None
-
-    same_label_threshold = threshold
-    different_label_threshold = max(threshold, 0.9)
-
-    for existing_ann in existing_annotations:
-        score = _annotation_overlap_score(existing_ann, new_bbox, new_mask)
-        if score <= 0:
-            continue
-
-        is_same_label = existing_ann.label_id == source_label_id
-        required_score = same_label_threshold if is_same_label else different_label_threshold
-        if score < required_score:
-            continue
-
-        if is_same_label:
-            logger.info(
-                "Skipping duplicate same-label annotation (overlap=%.3f with ann %s)",
-                score,
-                existing_ann.id,
-            )
-            return True, score, None
-
-        existing_label = store.get_label_by_id(existing_ann.label_id)
-        conflicting_label_name = (
-            existing_label.name if existing_label else f"label_{existing_ann.label_id}"
+def _ensure_no_running_job() -> None:
+    """The GPU services are shared with background tracking jobs (#3)."""
+    job = get_job_manager().active()
+    if job is not None and job.status == "running":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Tracking job {job.id} is running; stop or wait for it first",
         )
-        logger.info(
-            "Skipping - location already labeled as '%s' (overlap=%.3f with ann %s)",
-            conflicting_label_name,
-            score,
-            existing_ann.id,
-        )
-        return True, score, conflicting_label_name
-
-    return False, 0.0, None
 
 
-def _annotation_overlap_score(
-    annotation,
-    new_bbox: list[float],
-    new_mask: Optional[np.ndarray],
-) -> float:
-    """Return the best available overlap score for duplicate detection."""
-    scores: list[float] = []
-
-    if new_mask is not None and annotation.mask_rle:
-        try:
-            existing_mask = rle_to_mask(annotation.mask_rle)
-            if existing_mask.shape == new_mask.shape:
-                scores.append(mask_iou(new_mask, existing_mask))
-        except Exception as e:
-            logger.warning("Failed to compare masks for duplicate detection: %s", e)
-
-    if annotation.bbox_xyxy:
-        scores.append(_bbox_duplicate_score(new_bbox, annotation.bbox_xyxy))
-
-    return max(scores) if scores else 0.0
+def _tracking_fields(result: PropagationResult, expected_area_ratio: float) -> dict:
+    """Response fields describing tracking certainty."""
+    observed = result.signals.size_ratio if result.signals else None
+    return {
+        "status": result.status,
+        "uncertain_reasons": list(result.reasons),
+        "signals": result.signals.to_dict() if result.signals else None,
+        "next_expected_area_ratio": update_area_trend(expected_area_ratio, observed),
+    }
 
 
-def _bbox_duplicate_score(bbox1: list[float], bbox2: list[float]) -> float:
-    """Score bbox overlap for duplicate detection.
-
-    IoU catches similarly sized boxes. Intersection over the smaller box catches
-    cases where SAM/YOLO makes one box slightly tighter than the other while the
-    centers still refer to the same object.
-    """
-    x1 = max(bbox1[0], bbox2[0])
-    y1 = max(bbox1[1], bbox2[1])
-    x2 = min(bbox1[2], bbox2[2])
-    y2 = min(bbox1[3], bbox2[3])
-
-    if x2 <= x1 or y2 <= y1:
-        return 0.0
-
-    intersection = (x2 - x1) * (y2 - y1)
-    w1 = max(0.0, bbox1[2] - bbox1[0])
-    h1 = max(0.0, bbox1[3] - bbox1[1])
-    w2 = max(0.0, bbox2[2] - bbox2[0])
-    h2 = max(0.0, bbox2[3] - bbox2[1])
-    area1 = w1 * h1
-    area2 = w2 * h2
-    union = area1 + area2 - intersection
-    iou = intersection / union if union > 0 else 0.0
-
-    smaller_area = min(area1, area2)
-    containment = intersection / smaller_area if smaller_area > 0 else 0.0
-    cx1 = (bbox1[0] + bbox1[2]) / 2
-    cy1 = (bbox1[1] + bbox1[3]) / 2
-    cx2 = (bbox2[0] + bbox2[2]) / 2
-    cy2 = (bbox2[1] + bbox2[3]) / 2
-    center_distance = float(np.hypot(cx1 - cx2, cy1 - cy2))
-    smaller_diag = float(np.hypot(min(w1, w2), min(h1, h2)))
-
-    if smaller_diag > 0 and center_distance <= smaller_diag * 0.5:
-        return max(float(iou), float(containment))
-
-    return float(iou)
+def _lost_detail(e: PropagationError) -> str:
+    return f"Object lost ({e.reason}): {e}"
 
 
 # ==================== SAM Endpoints ====================
@@ -353,6 +297,7 @@ async def update_sam_settings(request: SAMSettingsRequest):
 @router.post("/unload")
 async def unload_all_models():
     """Unload all ML models to free GPU memory."""
+    _ensure_no_running_job()
     global _propagate_service, _current_embed_model
 
     unloaded = []
@@ -384,6 +329,7 @@ async def unload_all_models():
 @router.post("/unload/embed")
 async def unload_embed_model():
     """Unload embedding model to free GPU memory (for model switching)."""
+    _ensure_no_running_job()
     global _propagate_service, _current_embed_model
 
     unloaded = []
@@ -567,6 +513,7 @@ async def load_propagation(request: LoadModelRequest):
 
     Available embed_model options: vitb16, vitl16, vith16
     """
+    _ensure_no_running_job()
     global _propagate_service, _current_embed_model
 
     try:
@@ -646,6 +593,7 @@ async def propagation_status():
 @router.post("/propagate", response_model=PropagateResponse)
 async def propagate(request: PropagateRequest):
     """Propagate an annotation from source to target image."""
+    _ensure_no_running_job()
     global _propagate_service
 
     if _propagate_service is None:
@@ -673,6 +621,14 @@ async def propagate(request: PropagateRequest):
     source_image, src_w, src_h = _load_image(request.source_image_id)
     target_image, tgt_w, tgt_h = _load_image(request.target_image_id)
 
+    anchor_mask_area = (
+        _find_anchor_mask_area(
+            store, ann, request.source_image_id, request.anchor_annotation_id
+        )
+        if request.use_anchor
+        else None
+    )
+
     try:
         result = _propagate_service.propagate_annotation(
             source_image=source_image,
@@ -686,37 +642,27 @@ async def propagate(request: PropagateRequest):
             bbox_hint_scale=max(0.5, min(3.0, request.bbox_hint_scale)),
             prune_thin_artifacts=request.prune_thin_artifacts,
             top_k=request.top_k,
+            min_score=request.min_similarity,
             size_min_ratio=request.size_min_ratio,
             size_max_ratio=request.size_max_ratio,
             stop_on_size_mismatch=request.stop_on_size_mismatch,
+            expected_area_ratio=request.expected_area_ratio,
+            anchor_mask_area=anchor_mask_area,
         )
 
-        if result is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Propagation failed - could not find object in target",
-            )
+        new_bbox, new_mask, confidence = result.bbox, result.mask, result.confidence
+        fallback_used, area_ratio = result.fallback_used, result.area_ratio
 
-        new_bbox, new_mask, confidence, fallback_used, area_ratio = result
-
-        # Check for duplicates with existing annotations on target image
-        duplicate_skipped = False
-        duplicate_iou = 0.0
-        conflicting_label_name = None
-
-        if request.skip_duplicate_threshold > 0:
-            # Get existing annotations on target image
-            target_annotations = store.list_annotations(request.target_image_id)
-            duplicate_skipped, duplicate_iou, conflicting_label_name = (
-                _find_duplicate_annotation(
-                    store=store,
-                    existing_annotations=target_annotations,
-                    new_bbox=new_bbox,
-                    new_mask=new_mask,
-                    source_label_id=ann.label_id,
-                    threshold=request.skip_duplicate_threshold,
-                )
-            )
+        # Check for duplicates / ID switches against existing target annotations
+        dup = _check_duplicate(
+            store=store,
+            existing_annotations=store.list_annotations(request.target_image_id),
+            new_bbox=new_bbox,
+            new_mask=new_mask,
+            source_label_id=ann.label_id,
+            threshold=request.skip_duplicate_threshold,
+            source_track_id=ann.track_id,
+        )
 
         # Convert to RLE and polygon
         rle = mask_to_rle(new_mask)
@@ -729,14 +675,17 @@ async def propagate(request: PropagateRequest):
             confidence=float(confidence),
             fallback_used=fallback_used,
             area_ratio=area_ratio,
-            duplicate_skipped=duplicate_skipped,
-            duplicate_iou=duplicate_iou,
-            conflicting_label_name=conflicting_label_name,
+            duplicate_skipped=dup.skipped,
+            duplicate_iou=dup.iou,
+            conflicting_label_name=dup.conflicting_label_name,
+            track_id=ann.track_id,
+            possible_id_switch=dup.possible_id_switch,
+            conflicting_track_id=dup.conflicting_track_id,
+            conflicting_annotation_id=dup.conflicting_annotation_id,
+            **_tracking_fields(result, request.expected_area_ratio),
         )
-    except PropagationSizeMismatchError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except PropagationNotFoundError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except PropagationError as e:
+        raise HTTPException(status_code=400, detail=_lost_detail(e))
     except HTTPException:
         raise
     except Exception as e:
@@ -774,16 +723,20 @@ class PropagateAdvancedRequest(BaseModel):
     use_bbox_hint: bool = True
     bbox_hint_scale: float = 1.15
     prune_thin_artifacts: bool = True
-    size_min_ratio: float = 0.8
-    size_max_ratio: float = 1.2
-    stop_on_size_mismatch: bool = True
+    size_min_ratio: float = DEFAULT_SIZE_MIN_RATIO
+    size_max_ratio: float = DEFAULT_SIZE_MAX_RATIO
+    stop_on_size_mismatch: bool = False
     top_k: int = 5
+    min_similarity: float = DEFAULT_MIN_SIMILARITY
+    expected_area_ratio: float = 1.0
+    anchor_annotation_id: Optional[int] = None
+    use_anchor: bool = True
     skip_duplicate_threshold: float = (
         0.9  # Skip if IoU with existing >= this (0 = disabled)
     )
 
 
-class PropagateAdvancedResponse(BaseModel):
+class PropagateAdvancedResponse(TrackingStatusFields):
     bbox: list[float]
     mask_rle: dict
     polygon: list[float]
@@ -797,6 +750,11 @@ class PropagateAdvancedResponse(BaseModel):
     conflicting_label_name: str | None = (
         None  # If skipped due to different class at same location
     )
+    # Object identity (#4): result belongs to the source annotation's track.
+    track_id: Optional[int] = None
+    possible_id_switch: bool = False  # overlaps another track of the same label
+    conflicting_track_id: Optional[int] = None
+    conflicting_annotation_id: Optional[int] = None
 
 
 @router.post("/find-instances", response_model=FindAllInstancesResponse)
@@ -887,6 +845,7 @@ async def propagate_advanced(request: PropagateAdvancedRequest):
 
     When iou_verify is True, results are verified against dense prediction.
     """
+    _ensure_no_running_job()
     global _propagate_service
 
     if _propagate_service is None:
@@ -914,6 +873,14 @@ async def propagate_advanced(request: PropagateAdvancedRequest):
     source_image, _, _ = _load_image(request.source_image_id)
     target_image, tgt_w, tgt_h = _load_image(request.target_image_id)
 
+    anchor_mask_area = (
+        _find_anchor_mask_area(
+            store, ann, request.source_image_id, request.anchor_annotation_id
+        )
+        if request.use_anchor
+        else None
+    )
+
     try:
         result = _propagate_service.propagate_with_dense_fallback(
             source_image=source_image,
@@ -934,29 +901,25 @@ async def propagate_advanced(request: PropagateAdvancedRequest):
             size_max_ratio=request.size_max_ratio,
             stop_on_size_mismatch=request.stop_on_size_mismatch,
             top_k=request.top_k,
+            min_score=request.min_similarity,
+            expected_area_ratio=request.expected_area_ratio,
+            anchor_mask_area=anchor_mask_area,
         )
 
         # Convert to response
         rle = mask_to_rle(result.mask)
         polygon = mask_to_yolo_polygon(result.mask, tgt_w, tgt_h)
 
-        # Check for duplicates with existing annotations on target image
-        duplicate_skipped = False
-        duplicate_iou = 0.0
-        conflicting_label_name = None
-
-        if request.skip_duplicate_threshold > 0:
-            target_annotations = store.list_annotations(request.target_image_id)
-            duplicate_skipped, duplicate_iou, conflicting_label_name = (
-                _find_duplicate_annotation(
-                    store=store,
-                    existing_annotations=target_annotations,
-                    new_bbox=result.bbox,
-                    new_mask=result.mask,
-                    source_label_id=ann.label_id,
-                    threshold=request.skip_duplicate_threshold,
-                )
-            )
+        # Check for duplicates / ID switches against existing target annotations
+        dup = _check_duplicate(
+            store=store,
+            existing_annotations=store.list_annotations(request.target_image_id),
+            new_bbox=result.bbox,
+            new_mask=result.mask,
+            source_label_id=ann.label_id,
+            threshold=request.skip_duplicate_threshold,
+            source_track_id=ann.track_id,
+        )
 
         return PropagateAdvancedResponse(
             bbox=result.bbox,
@@ -967,15 +930,18 @@ async def propagate_advanced(request: PropagateAdvancedRequest):
             area_ratio=result.area_ratio,
             method=result.method,
             iou_score=result.iou_score,
-            duplicate_skipped=duplicate_skipped,
-            duplicate_iou=duplicate_iou,
-            conflicting_label_name=conflicting_label_name,
+            duplicate_skipped=dup.skipped,
+            duplicate_iou=dup.iou,
+            conflicting_label_name=dup.conflicting_label_name,
+            track_id=ann.track_id,
+            possible_id_switch=dup.possible_id_switch,
+            conflicting_track_id=dup.conflicting_track_id,
+            conflicting_annotation_id=dup.conflicting_annotation_id,
+            **_tracking_fields(result, request.expected_area_ratio),
         )
 
-    except PropagationSizeMismatchError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except PropagationNotFoundError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except PropagationError as e:
+        raise HTTPException(status_code=400, detail=_lost_detail(e))
     except Exception as e:
         logger.error(f"Advanced propagation failed: {e}")
         logger.error(traceback.format_exc())

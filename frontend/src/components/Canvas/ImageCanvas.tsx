@@ -44,7 +44,7 @@ export function ImageCanvas() {
 
   const currentImage = images[currentImageIndex];
   // Skip heavy rendering when performance propagation is running (no failed image = loop active)
-  const isPerformanceLoopActive = performanceProgress !== null && performanceProgress.failedImageIndex === null;
+  const isPerformanceLoopActive = performanceProgress !== null && performanceProgress.performance && performanceProgress.failedImageIndex === null;
 
   // Get label color
   const getLabelColor = useCallback((labelId: number): string => {
