@@ -5,7 +5,20 @@ import { useUIStore } from './uiStore';
 
 const MAX_ANNOTATION_CACHE_ENTRIES = 40;
 const annotationCache = new Map<number, Annotation[]>();
-const annotationInflight = new Map<number, Promise<Annotation[]>>();
+const annotationInflight = new Map<number, { promise: Promise<Annotation[]>; signal?: AbortSignal }>();
+const imageVersions = new Map<number, number>();
+let projectVersion = 0;
+let cacheVersion = 0;
+let activeLoad = 0;
+
+function annotationVersion(imageId: number): string {
+  return `${projectVersion}:${cacheVersion}:${imageVersions.get(imageId) ?? 0}`;
+}
+
+function invalidateImage(imageId: number) {
+  imageVersions.set(imageId, (imageVersions.get(imageId) ?? 0) + 1);
+  annotationInflight.delete(imageId);
+}
 
 interface AnnotationState {
   // State
@@ -20,6 +33,7 @@ interface AnnotationState {
   loadAnnotations: (imageId: number, signal?: AbortSignal) => Promise<void>;
   prefetchAnnotations: (imageIds: number[]) => void;
   invalidateAnnotations: (imageId?: number) => void;
+  resetForProject: () => void;
   loadLabels: () => Promise<void>;
   createAnnotation: (data: {
     image_id: number;
@@ -65,24 +79,27 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
 
   // Actions
   loadAnnotations: async (imageId, signal) => {
+    const request = ++activeLoad;
+    const version = annotationVersion(imageId);
+    const isCurrent = () => !signal?.aborted && request === activeLoad && version === annotationVersion(imageId);
     set({ isLoading: true });
     try {
       const cachedAnnotations = annotationCache.get(imageId);
       if (cachedAnnotations) {
-        if (!signal?.aborted) {
+        if (isCurrent()) {
           set({ annotations: cachedAnnotations, selectedAnnotationId: null, refinePoints: [], isLoading: false });
         }
         return;
       }
 
       const annotations = await getAnnotationsForImage(imageId, signal);
-      if (signal?.aborted) return;
+      if (!isCurrent()) return;
       set({ annotations, selectedAnnotationId: null, refinePoints: [] });
     } catch (err) {
-      if (signal?.aborted) return;
+      if (!isCurrent()) return;
       throw err;
     } finally {
-      if (!signal?.aborted) {
+      if (isCurrent()) {
         set({ isLoading: false });
       }
     }
@@ -99,17 +116,28 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
 
   invalidateAnnotations: (imageId) => {
     if (imageId === undefined) {
+      cacheVersion += 1;
+      activeLoad += 1;
+      imageVersions.clear();
       annotationCache.clear();
       annotationInflight.clear();
       return;
     }
     annotationCache.delete(imageId);
-    annotationInflight.delete(imageId);
+    invalidateImage(imageId);
+  },
+
+  resetForProject: () => {
+    projectVersion += 1;
+    get().invalidateAnnotations();
+    set({ annotations: [], labels: [], selectedAnnotationId: null, selectedLabelId: null, refinePoints: [], isLoading: false });
   },
 
   loadLabels: async () => {
+    const version = projectVersion;
     try {
       const labels = await api.listLabels();
+      if (version !== projectVersion) return;
       set({ labels });
       // Auto-select first label if none selected
       if (labels.length > 0 && get().selectedLabelId === null) {
@@ -121,7 +149,9 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   },
 
   createAnnotation: async (data) => {
+    const version = projectVersion;
     const annotation = await api.createAnnotation(data);
+    if (version !== projectVersion) return annotation;
     addAnnotationToCache(annotation);
     set((state) => ({
       annotations: [...state.annotations, annotation],
@@ -131,7 +161,9 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   },
 
   updateAnnotation: async (annotationId, data) => {
+    const version = projectVersion;
     const updated = await api.updateAnnotation(annotationId, data);
+    if (version !== projectVersion) return;
     updateAnnotationInCache(updated);
     set((state) => ({
       annotations: state.annotations.map((a) =>
@@ -141,8 +173,10 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   },
 
   deleteAnnotation: async (annotationId) => {
+    const version = projectVersion;
     const existingImageId = get().annotations.find((a) => a.id === annotationId)?.image_id;
     await api.deleteAnnotation(annotationId);
+    if (version !== projectVersion) return;
     removeAnnotationFromCache(annotationId, existingImageId);
     set((state) => ({
       annotations: state.annotations.filter((a) => a.id !== annotationId),
@@ -166,7 +200,9 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   },
 
   createLabel: async (name, color) => {
+    const version = projectVersion;
     const label = await api.createLabel(name, color);
+    if (version !== projectVersion) return label;
     set((state) => ({
       labels: [...state.labels, label],
       selectedLabelId: label.id,
@@ -175,7 +211,9 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   },
 
   updateLabel: async (labelId, data) => {
+    const version = projectVersion;
     const updated = await api.updateLabel(labelId, data);
+    if (version !== projectVersion) return;
     set((state) => ({
       labels: state.labels.map((l) => (l.id === labelId ? updated : l)),
     }));
@@ -192,6 +230,7 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   },
 
   clearAnnotations: () => {
+    activeLoad += 1;
     set({ annotations: [], selectedAnnotationId: null, refinePoints: [], isLoading: false });
   },
 }));
@@ -201,23 +240,29 @@ async function getAnnotationsForImage(imageId: number, signal?: AbortSignal): Pr
   if (cachedAnnotations) return cachedAnnotations;
 
   const existingRequest = annotationInflight.get(imageId);
-  if (existingRequest) return existingRequest;
+  if (existingRequest && !existingRequest.signal?.aborted) return existingRequest.promise;
 
+  const version = annotationVersion(imageId);
   const request = api.listAnnotations(imageId, signal)
     .then((annotations) => {
-      annotationCache.set(imageId, annotations);
-      trimAnnotationCache();
+      if (!signal?.aborted && version === annotationVersion(imageId)) {
+        annotationCache.set(imageId, annotations);
+        trimAnnotationCache();
+      }
       return annotations;
     })
     .finally(() => {
-      annotationInflight.delete(imageId);
+      if (annotationInflight.get(imageId)?.promise === request) {
+        annotationInflight.delete(imageId);
+      }
     });
 
-  annotationInflight.set(imageId, request);
+  annotationInflight.set(imageId, { promise: request, signal });
   return request;
 }
 
 function addAnnotationToCache(annotation: Annotation) {
+  invalidateImage(annotation.image_id);
   const cachedAnnotations = annotationCache.get(annotation.image_id);
   if (!cachedAnnotations) return;
   annotationCache.set(annotation.image_id, [...cachedAnnotations, annotation]);
@@ -225,6 +270,7 @@ function addAnnotationToCache(annotation: Annotation) {
 }
 
 function updateAnnotationInCache(annotation: Annotation) {
+  invalidateImage(annotation.image_id);
   const cachedAnnotations = annotationCache.get(annotation.image_id);
   if (!cachedAnnotations) return;
   annotationCache.set(
@@ -234,6 +280,7 @@ function updateAnnotationInCache(annotation: Annotation) {
 }
 
 function removeAnnotationFromCache(annotationId: number, imageId?: number) {
+  if (imageId !== undefined) invalidateImage(imageId);
   if (imageId !== undefined && annotationCache.has(imageId)) {
     const cachedAnnotations = annotationCache.get(imageId) ?? [];
     annotationCache.set(imageId, cachedAnnotations.filter((annotation) => annotation.id !== annotationId));

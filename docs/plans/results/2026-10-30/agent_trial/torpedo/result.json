@@ -1,0 +1,73 @@
+{
+  "sequence": "torpedo",
+  "export_dir": "/tmp/autoseg_trial/torpedo/state/export/torpedo_yolo-seg/labels/train",
+  "score": {
+    "frames": 526,
+    "gt_frames": 526,
+    "gt_empty_frames": 0,
+    "mean_iou": 0.9532,
+    "hit_rate": 1.0,
+    "good_rate": 0.9905,
+    "absent_acc": null,
+    "bad_frames": 5,
+    "missing_label_files": 0,
+    "bad_examples": [
+      "000394",
+      "000395",
+      "000398",
+      "000399",
+      "000414"
+    ]
+  },
+  "cli_calls": {
+    "status": 2,
+    "project": 1,
+    "track": 3,
+    "sheet": 3,
+    "view": 3,
+    "segment": 1,
+    "export": 1
+  },
+  "png_images_opened": 7,
+  "wall_seconds": 95.41,
+  "tokens": {
+    "input_tokens": 34,
+    "cache_creation_input_tokens": 26955,
+    "cache_read_input_tokens": 444139,
+    "output_tokens": 2813,
+    "output_tokens_details": {
+      "thinking_tokens": 260
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 26955,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "iterations": [
+      {
+        "input_tokens": 2,
+        "output_tokens": 704,
+        "cache_read_input_tokens": 33200,
+        "cache_creation_input_tokens": 2767,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 2767
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard",
+    "fallback_credit": null
+  },
+  "cost_usd": 0.18069490000000002,
+  "final_message": "Torpido panosunu etiketledim ve export ettim. Hi\u00e7 d\u00fczeltme gerekmedi.\n\n- **Track:** 1, etiket `torpedo_board`. Proje `/tmp/autoseg_trial/torpedo/state/projects/torpedo` alt\u0131nda. Daha \u00f6nce a\u00e7\u0131k olan `torpedo_cli` projesine dokunmad\u0131m.\n- **Kare say\u0131s\u0131:** 526. Bu karelerde maske var.\n- **Keyframe:** Sadece frame 22. Pano orada en b\u00fcy\u00fck ve en net g\u00f6r\u00fcn\u00fcyordu. Maske yaln\u0131zca beyaz panoyu kaps\u0131yor, bacaklar ve zemin d\u0131\u015far\u0131da.\n- **Absent aral\u0131\u011f\u0131:** Yok.\n- **G\u00f6rmezden gelinen issue'lar:**\n  - **9** (drift, 1 kare): Maske do\u011fru, tek karelik k\u00fc\u00e7\u00fck bir sapma.\n  - **210\u2013224** (lost, `kf_area_tiny`): Pano uzakla\u015f\u0131p k\u00fc\u00e7\u00fcld\u00fc\u011f\u00fc i\u00e7in i\u015faretlenmi\u015f. Frame 217'de maske do\u011fru.\n  - **359\u2013472** (lost, `kf_area_tiny`): Ayn\u0131 neden. Frame 414, 440 ve 472'de maske panoyu do\u011fru izliyor.\n- **\u00c7\u00f6z\u00fclmemi\u015f issue:** Yok.\n- **Frame 525:** Sahne farkl\u0131 (y\u00fcz\u00fcc\u00fc var, pano solda). Maske yine de panonun \u00fczerinde.\n- **Export:** YOLO-seg, do\u011frulama temiz (hata ve uyar\u0131 yok), `/tmp/autoseg_trial/torpedo/state/export/torpedo_yolo-seg`. Hepsi `train` setinde (526 g\u00f6r\u00fcnt\u00fc, 526 etiket), `val` bo\u015f.\n- **Son sheet:** `/tmp/autoseg_trial/torpedo/state/views/sheet_t1_every22.png`\n\nK\u00fc\u00e7\u00fck pano karelerinde maske birka\u00e7 piksellik oldu\u011fundan s\u0131n\u0131r hassasiyeti d\u00fc\u015f\u00fck olabilir. Gerekirse o aral\u0131klara ek keyframe koyabilirim.",
+  "human_interventions": 0,
+  "claude_exit": 0,
+  "transcript": "/tmp/autoseg_trial/torpedo/transcript.jsonl",
+  "final_sheet": "/tmp/autoseg_trial/torpedo/state/views/sheet_t1_every22.png"
+}

@@ -9,6 +9,17 @@ export type EmbedModel =
   | 'pixio_vitb16' | 'pixio_vitl16' | 'pixio_vith16' | 'pixio_vit1b16';
 export type ReviewFilter = 'all' | 'pending' | 'approved' | 'rejected';
 
+/** Visual evidence currently being produced by the agent. Kept separate from
+ * annotations so the canvas can show work-in-progress before it is persisted. */
+export interface AgentOverlay {
+  frame?: number;
+  imageId?: number;
+  bbox?: [number, number, number, number] | null;
+  maskUrl?: string | null;
+  phase?: 'idle' | 'drawing' | 'segmenting' | 'propagating';
+  label?: string;
+}
+
 // Keys for localStorage
 const STORAGE_KEY = 'autoseg-ui-settings';
 
@@ -42,6 +53,7 @@ interface UIState {
   trackingDuplicateThreshold: number; // Same-label overlap threshold for duplicate suppression
   autoNext: boolean; // Auto-advance to next image after propagation
   propagationFailureMode: 'stop' | 'skip'; // 'stop' = stop on failure, 'skip' = skip failed image and continue
+  followAgent: boolean; // Keep the canvas on the frame the agent is working on
 
   // YOLO assisted annotation settings
   yoloModelPath: string;
@@ -74,6 +86,8 @@ interface UIState {
   isRunningYolo: boolean;
   autoYoloEnabled: boolean;
   performanceProgress: PerformanceProgress | null; // Progress tracking for batch propagation
+  agentActive: boolean;
+  agentOverlay: AgentOverlay | null;
   
   // Modal states
   showCreateProjectModal: boolean;
@@ -114,6 +128,9 @@ interface UIState {
   setTrackingDuplicateThreshold: (threshold: number) => void;
   setAutoNext: (enabled: boolean) => void;
   setPropagationFailureMode: (mode: 'stop' | 'skip') => void;
+  setFollowAgent: (enabled: boolean) => void;
+  setAgentActive: (active: boolean) => void;
+  setAgentOverlay: (overlay: AgentOverlay | null) => void;
   setYoloModelPath: (path: string) => void;
   setYoloConfidence: (confidence: number) => void;
   setYoloIou: (iou: number) => void;
@@ -164,6 +181,7 @@ export const useUIStore = create<UIState>()(
       trackingDuplicateThreshold: 0.75, // Default: skip same-label results that mostly overlap
       autoNext: false, // Default: manual navigation
       propagationFailureMode: 'stop', // Default: stop on failure (safer)
+      followAgent: true,
 
       // YOLO assisted annotation settings
       yoloModelPath: '',
@@ -196,6 +214,8 @@ export const useUIStore = create<UIState>()(
       isRunningYolo: false,
       autoYoloEnabled: false,
       performanceProgress: null,
+      agentActive: false,
+      agentOverlay: null,
       showCreateProjectModal: false,
       showOpenProjectModal: false,
       showExportModal: false,
@@ -355,6 +375,9 @@ export const useUIStore = create<UIState>()(
       },
 
       setStatusMessage: (message) => set({ statusMessage: message }),
+      setFollowAgent: (enabled) => set({ followAgent: enabled }),
+      setAgentActive: (active) => set({ agentActive: active }),
+      setAgentOverlay: (overlay) => set({ agentOverlay: overlay }),
       setIsPropagating: (value) => set({ isPropagating: value }),
       setIsRunningYolo: (value) => set({ isRunningYolo: value }),
       setAutoYoloEnabled: (enabled) => set({ autoYoloEnabled: enabled }),
@@ -407,6 +430,7 @@ export const useUIStore = create<UIState>()(
         iouThreshold: state.iouThreshold,
         trackingDuplicateThreshold: state.trackingDuplicateThreshold,
         autoNext: state.autoNext,
+        followAgent: state.followAgent,
         performanceMode: state.performanceMode,
         yoloModelPath: state.yoloModelPath,
         yoloConfidence: state.yoloConfidence,

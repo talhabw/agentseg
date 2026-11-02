@@ -1,0 +1,186 @@
+{
+  "frames": 526,
+  "frames_with_gt": 526,
+  "mean_iou": 0.9618,
+  "median_iou": 0.9727,
+  "hit_rate": 1.0,
+  "zero_pred_frames": 0,
+  "fp_total": 0,
+  "frames_with_fp": 0,
+  "max_objects": 1,
+  "id_switches": 0,
+  "first_loss": null,
+  "name": "F_point1_sam3_pf441_both_corrmask_loss08",
+  "model": "sam3",
+  "prompt": {
+    "kind": "points",
+    "frame_index": 441,
+    "points": [
+      [
+        0.368125,
+        0.510045
+      ]
+    ],
+    "point_labels": [
+      1
+    ],
+    "obj_id": 1,
+    "latency_sec": 0.157,
+    "n_objects_on_prompt_frame": 1
+  },
+  "prompt_frame": 441,
+  "direction": "both",
+  "output_prob_thresh": null,
+  "fps_http": 11.18,
+  "propagate_sec": 141.5,
+  "wall_sec": 143.2,
+  "torch_peak_vram_gib": 11.35,
+  "torch_peak_vram_note": "torch.cuda.max_memory_allocated since server start (not reset per run)",
+  "torch_peak_before_run_gib": 11.34,
+  "box_vs_mask_bbox_max_px": 1.0,
+  "frames_missing": [],
+  "prime": null,
+  "keep_cache": false,
+  "corrections": [
+    {
+      "kind": "mask",
+      "frame_index": 0,
+      "obj_id": 1,
+      "mask_area": 16053,
+      "mask_score": 0.97265625,
+      "mask_box_iou_vs_gt": 0.9920010239999996,
+      "latency_sec": 0.075,
+      "n_objects_on_prompt_frame": 1,
+      "segment_before": {
+        "mean_iou": 0.514,
+        "hit_rate": 0.7034,
+        "first_loss": 0
+      },
+      "segment_after": {
+        "mean_iou": 0.8447,
+        "hit_rate": 0.9829,
+        "first_loss": null
+      },
+      "frames_repropagated": 526
+    },
+    {
+      "kind": "mask",
+      "frame_index": 363,
+      "obj_id": 1,
+      "mask_area": 2725,
+      "mask_score": 0.953125,
+      "mask_box_iou_vs_gt": 0.9811264317096777,
+      "latency_sec": 0.187,
+      "n_objects_on_prompt_frame": 1,
+      "segment_before": {
+        "mean_iou": 0.5612,
+        "hit_rate": 0.9448,
+        "first_loss": null
+      },
+      "segment_after": {
+        "mean_iou": 0.8021,
+        "hit_rate": 0.9877,
+        "first_loss": null
+      },
+      "frames_repropagated": 163
+    },
+    {
+      "kind": "mask",
+      "frame_index": 430,
+      "obj_id": 1,
+      "mask_area": 2055,
+      "mask_score": 0.91015625,
+      "mask_box_iou_vs_gt": 0.9999977142883261,
+      "latency_sec": 0.213,
+      "n_objects_on_prompt_frame": 1,
+      "segment_before": {
+        "mean_iou": 0.7164,
+        "hit_rate": 0.9792,
+        "first_loss": null
+      },
+      "segment_after": {
+        "mean_iou": 0.7431,
+        "hit_rate": 0.9792,
+        "first_loss": null
+      },
+      "frames_repropagated": 96
+    },
+    {
+      "kind": "mask",
+      "frame_index": 431,
+      "obj_id": 1,
+      "mask_area": 2135,
+      "mask_score": 0.91796875,
+      "mask_box_iou_vs_gt": 0.9999941818384922,
+      "latency_sec": 0.128,
+      "n_objects_on_prompt_frame": 1,
+      "segment_before": {
+        "mean_iou": 0.7411,
+        "hit_rate": 0.9789,
+        "first_loss": null
+      },
+      "segment_after": {
+        "mean_iou": 0.8261,
+        "hit_rate": 0.9789,
+        "first_loss": null
+      },
+      "frames_repropagated": 95
+    },
+    {
+      "kind": "mask",
+      "frame_index": 437,
+      "obj_id": 1,
+      "mask_area": 1878,
+      "mask_score": 0.92578125,
+      "mask_box_iou_vs_gt": 0.9999939622933127,
+      "latency_sec": 0.202,
+      "n_objects_on_prompt_frame": 1,
+      "segment_before": {
+        "mean_iou": 0.8182,
+        "hit_rate": 0.9775,
+        "first_loss": null
+      },
+      "segment_after": {
+        "mean_iou": 0.5594,
+        "hit_rate": 0.9663,
+        "first_loss": null
+      },
+      "frames_repropagated": 89
+    },
+    {
+      "kind": "mask",
+      "frame_index": 439,
+      "obj_id": 1,
+      "mask_area": 1908,
+      "mask_score": 0.92578125,
+      "mask_box_iou_vs_gt": 0.974994142669623,
+      "latency_sec": 0.127,
+      "n_objects_on_prompt_frame": 1,
+      "segment_before": {
+        "mean_iou": 0.5507,
+        "hit_rate": 0.9655,
+        "first_loss": null
+      },
+      "segment_after": {
+        "mean_iou": 0.9498,
+        "hit_rate": 1.0,
+        "first_loss": null
+      },
+      "frames_repropagated": 87
+    }
+  ],
+  "n_corrections": 6,
+  "before_correction": {
+    "frames": 526,
+    "frames_with_gt": 526,
+    "mean_iou": 0.514,
+    "median_iou": 0.52,
+    "hit_rate": 0.7034,
+    "zero_pred_frames": 0,
+    "fp_total": 0,
+    "frames_with_fp": 0,
+    "max_objects": 1,
+    "id_switches": 0,
+    "first_loss": 0
+  }
+}

@@ -1,0 +1,13 @@
+{"ts": 1793367595.5375023, "argv": ["status"], "exit": 0, "seconds": 0.04}
+{"ts": 1793367599.409454, "argv": ["status"], "exit": 0, "seconds": 0.04}
+{"ts": 1793367601.1871843, "argv": ["project", "open", "/tmp/autoseg_trial/exit/images", "--name", "exit", "--project-dir", "/tmp/autoseg_trial/exit/state/projects/exit"], "exit": 0, "seconds": 0.19}
+{"ts": 1793367601.8902576, "argv": ["sheet"], "exit": 0, "seconds": 0.64}
+{"ts": 1793367604.966116, "argv": ["view", "308", "--grid"], "exit": 0, "seconds": 0.04}
+{"ts": 1793367608.7724843, "argv": ["segment", "308", "--box", "205,98,302,182", "--no-grid"], "exit": 0, "seconds": 0.11}
+{"ts": 1793367612.3313577, "argv": ["track", "create", "--label", "torpedo_board", "--preview", "f7480ab11b944dd0"], "exit": 0, "seconds": 0.04}
+{"ts": 1793367665.1152573, "argv": ["track", "propagate", "1"], "exit": 0, "seconds": 52.72}
+{"ts": 1793367673.4208233, "argv": ["sheet", "--track", "1", "--every", "8", "--frames", "0-251"], "exit": 0, "seconds": 6.16}
+{"ts": 1793367678.9204412, "argv": ["sheet", "--track", "1", "--frames", "20,26,30,36,42,48,57,76,82,86,103,120,137,151,165,174,196,205,216,230,237,241,524,525"], "exit": 0, "seconds": 0.66}
+{"ts": 1793367684.1261578, "argv": ["view", "525", "--track", "1", "--grid"], "exit": 0, "seconds": 0.04}
+{"ts": 1793367684.3823414, "argv": ["sheet", "--track", "1", "--frames", "508,512,516,519,521,523"], "exit": 0, "seconds": 0.19}
+{"ts": 1793367688.5137436, "argv": ["export", "--out", "/tmp/autoseg_trial/exit/export"], "exit": 0, "seconds": 0.07}

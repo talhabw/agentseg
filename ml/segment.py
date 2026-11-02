@@ -5,6 +5,7 @@ SAM Segmentation Service - wrapper around SAM3 for mask generation.
 import numpy as np
 from typing import Optional
 import logging
+import os
 
 import torch
 from PIL import Image
@@ -31,6 +32,8 @@ class SegmentService:
         self._processor = None
         self._image_state = None
         self._current_image_id = None
+        self.backend = os.getenv("SAM_SEGMENT_BACKEND", "sam_server").lower()
+        self._server_client = None
 
         # SAM settings - tunable parameters for mask generation
         self._settings = {
@@ -72,6 +75,8 @@ class SegmentService:
 
     def is_loaded(self) -> bool:
         """Check if model is loaded."""
+        if self.backend in {"sam_server", "server", "remote"}:
+            return self._server_client is not None
         return self.model is not None and self._processor is not None
 
     def load_model(self, model_size: str = "large"):
@@ -81,6 +86,13 @@ class SegmentService:
         Args:
             model_size: Model size (currently ignored - SAM3 uses large model)
         """
+        if self.backend in {"sam_server", "server", "remote"}:
+            from ml.sam3_video.client import Sam3Client
+            url = os.getenv("SAM_SERVER_URL", "http://localhost:8770")
+            self._server_client = Sam3Client(url)
+            self._server_client.check_ready()
+            logger.info("Using sam_server image head at %s", url)
+            return
         try:
             from sam3 import build_sam3_image_model
             from sam3.model.sam3_image_processor import Sam3Processor
@@ -115,6 +127,12 @@ class SegmentService:
 
     def unload_model(self):
         """Unload model to free memory."""
+        if self._server_client is not None:
+            try:
+                self._server_client.close()
+            except Exception:
+                pass
+            self._server_client = None
         # Move model to CPU before deletion to ensure CUDA tensors are freed
         if self.model is not None:
             try:
@@ -157,6 +175,13 @@ class SegmentService:
         """
         if not self.is_loaded():
             raise RuntimeError("Model not loaded. Call load_model() first.")
+
+        if self.backend in {"sam_server", "server", "remote"}:
+            # The server API accepts a file path at prediction time.  Keep the
+            # legacy ndarray API usable by materialising a temporary image.
+            self._current_image_id = image_id
+            self._image_state = image_id
+            return
 
         # Check if we already have this image cached
         if image_id and image_id == self._current_image_id:
@@ -201,6 +226,22 @@ class SegmentService:
         """
         if not self.is_loaded():
             raise RuntimeError("Model not loaded. Call load_model() first.")
+
+        if self.backend in {"sam_server", "server", "remote"}:
+            if not self._current_image_id:
+                raise RuntimeError("No image set. Call set_image() first.")
+            points = []
+            labels = []
+            for pt in pos_points or ():
+                points.append(pt); labels.append(1)
+            for pt in neg_points or ():
+                points.append(pt); labels.append(0)
+            mask, score = self._server_client.segment(
+                self._current_image_id, box=bbox_xyxy,
+                points=points or None, point_labels=labels or None,
+            )
+            from core.masks import mask_to_bbox
+            return mask.astype(np.uint8), float(score), mask_to_bbox(mask)
 
         if self._image_state is None:
             raise RuntimeError("No image set. Call set_image() first.")
@@ -301,6 +342,17 @@ class SegmentService:
 
         if not self.is_loaded():
             raise RuntimeError("Model not loaded. Call load_model() first.")
+
+        if self.backend in {"sam_server", "server", "remote"}:
+            if not self._current_image_id:
+                raise RuntimeError("No image set. Call set_image() first.")
+            points = list(pos_points) + list(neg_points or ())
+            labels = [1] * len(pos_points) + [0] * len(neg_points or ())
+            mask, score = self._server_client.segment(
+                self._current_image_id, points=points, point_labels=labels,
+            )
+            from core.masks import mask_to_bbox
+            return mask.astype(np.uint8), float(score), mask_to_bbox(mask)
 
         if self._image_state is None:
             raise RuntimeError("No image set. Call set_image() first.")

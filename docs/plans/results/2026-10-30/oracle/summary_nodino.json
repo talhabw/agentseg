@@ -1,0 +1,1927 @@
+{
+  "config": {
+    "lost_kf_area_ratio": 0.1,
+    "step_area_min": 0.5,
+    "step_area_max": 2.0,
+    "trend_alpha": 0.3,
+    "trend_clamp": [
+      0.8,
+      1.25
+    ],
+    "area_window": 10,
+    "win_area_min": 0.4,
+    "win_area_max": 3.0,
+    "edge_kf_area": 0.3,
+    "kf_area_min": 0.3,
+    "kf_area_max": 10.0,
+    "max_aspect_log": 0.7,
+    "min_fill_ratio": 0.6,
+    "max_center_jump": 3.0,
+    "min_component_px": 30,
+    "min_largest_frac": 0.9,
+    "border_margin": 2,
+    "dino_review": 0.6,
+    "dino_lost": 0.35,
+    "dino_every": 3,
+    "merge_gap": 3,
+    "min_issue_frames": 1
+  },
+  "dino": false,
+  "budget": 10,
+  "gate": {
+    "checks": [
+      {
+        "check": "torpedo mean IoU >= 0.95",
+        "pass": true,
+        "value": 0.9662
+      },
+      {
+        "check": "torpedo <= 1 edit / 100 frames",
+        "pass": true,
+        "value": 0.0
+      },
+      {
+        "check": "sub4 mean IoU >= 0.90",
+        "pass": true,
+        "value": 0.9634
+      },
+      {
+        "check": "exit mean IoU >= 0.90",
+        "pass": true,
+        "value": 0.9468
+      },
+      {
+        "check": "occl mean IoU >= 0.90",
+        "pass": true,
+        "value": 0.9562
+      },
+      {
+        "check": "mid mean IoU >= 0.90",
+        "pass": true,
+        "value": 0.9574
+      },
+      {
+        "check": "exit: pass-1 loss events caught as issues",
+        "pass": true,
+        "value": "5/5"
+      },
+      {
+        "check": "occl: pass-1 loss events caught as issues",
+        "pass": true,
+        "value": "1/1"
+      },
+      {
+        "check": "issue recall >= 0.9 (pooled, all seqs/rounds, raw)",
+        "pass": true,
+        "value": 0.9385
+      }
+    ],
+    "pass": true,
+    "recall_pooled": 0.9385,
+    "precision_pooled": 0.0502,
+    "recall_pooled_excl_label_errors": 0.9608,
+    "recall_pass1": 0.8919,
+    "recall_pass1_excl_label_errors": 0.931,
+    "precision_pass1": 0.0508,
+    "pooled_counts": {
+      "bad": 65,
+      "bad_in_issue": 61,
+      "issue_frames": 1216,
+      "issue_bad": 61,
+      "bad_x": 51,
+      "bad_x_in_issue": 49
+    },
+    "pass1_counts": {
+      "bad": 37,
+      "bad_in_issue": 33,
+      "issue_frames": 649,
+      "issue_bad": 33,
+      "bad_x": 29,
+      "bad_x_in_issue": 27
+    }
+  },
+  "results": [
+    {
+      "seq": "torpedo",
+      "frames": 526,
+      "prompt": {
+        "frame": 0,
+        "mask_box_iou": 0.992,
+        "score": 0.9727
+      },
+      "gt_frames": 526,
+      "gt_empty_frames": 0,
+      "mean_iou": 0.9662,
+      "hit_rate": 1.0,
+      "good_rate": 0.9962,
+      "absent_acc": null,
+      "bad_frames": 2,
+      "pass1": {
+        "mean_iou": 0.9662,
+        "hit_rate": 1.0,
+        "good_rate": 0.9962,
+        "absent_acc": null,
+        "bad": 2,
+        "n_issues": 4,
+        "loss_events": [],
+        "loss_events_caught": []
+      },
+      "edits": 0,
+      "edits_per_100": 0.0,
+      "edit_kinds": {},
+      "views": 40,
+      "rounds": 0,
+      "budget_exhausted": false,
+      "remaining_issues": [
+        {
+          "track_id": "torpedo",
+          "start": 210,
+          "end": 237,
+          "worst_frame": 218,
+          "kind": "drift",
+          "n_frames": 23,
+          "n_lost": 0,
+          "reasons": {
+            "kf_shrink": 23
+          },
+          "signals": {
+            "severity": 0.8623,
+            "reasons": "kf_shrink",
+            "origin": 0,
+            "area": 3882,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.9241,
+            "kf_area": 0.2418,
+            "aspect_log": 0.2,
+            "fill_ratio": 1.0281,
+            "step_area": 0.9987,
+            "step_rel": 1.0266,
+            "trend": 0.9728,
+            "jump": 0.0
+          }
+        },
+        {
+          "track_id": "torpedo",
+          "start": 247,
+          "end": 254,
+          "worst_frame": 251,
+          "kind": "drift",
+          "n_frames": 8,
+          "n_lost": 0,
+          "reasons": {
+            "kf_shrink": 8
+          },
+          "signals": {
+            "severity": 0.5598,
+            "reasons": "kf_shrink",
+            "origin": 0,
+            "area": 4187,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.8123,
+            "kf_area": 0.2608,
+            "aspect_log": 0.1513,
+            "fill_ratio": 1.0253,
+            "step_area": 0.8907,
+            "step_rel": 0.9017,
+            "trend": 0.9878,
+            "jump": 0.5248
+          }
+        },
+        {
+          "track_id": "torpedo",
+          "start": 349,
+          "end": 472,
+          "worst_frame": 437,
+          "kind": "drift",
+          "n_frames": 122,
+          "n_lost": 0,
+          "reasons": {
+            "kf_shrink": 122,
+            "step_shrink": 1
+          },
+          "signals": {
+            "severity": 3.5959,
+            "reasons": "kf_shrink",
+            "origin": 0,
+            "area": 1960,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.7977,
+            "kf_area": 0.1221,
+            "aspect_log": 0.3876,
+            "fill_ratio": 1.0007,
+            "step_area": 0.7193,
+            "step_rel": 0.7148,
+            "trend": 1.0063,
+            "jump": 1.432
+          }
+        },
+        {
+          "track_id": "torpedo",
+          "start": 483,
+          "end": 488,
+          "worst_frame": 487,
+          "kind": "drift",
+          "n_frames": 6,
+          "n_lost": 0,
+          "reasons": {
+            "kf_shrink": 6
+          },
+          "signals": {
+            "severity": 0.1394,
+            "reasons": "kf_shrink",
+            "origin": 0,
+            "area": 4651,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.9614,
+            "kf_area": 0.2897,
+            "aspect_log": 0.2472,
+            "fill_ratio": 1.0036,
+            "step_area": 0.9688,
+            "step_rel": 0.9688,
+            "trend": 1.0,
+            "jump": 0.4825
+          }
+        }
+      ],
+      "recall_pass1": 1.0,
+      "precision_pass1": 0.012,
+      "recall_pooled": 1.0,
+      "recall_pass1_excl_label_errors": null,
+      "recall_pooled_excl_label_errors": null,
+      "label_error_frames": [
+        393,
+        394
+      ],
+      "precision_pooled": 0.012,
+      "pooled_counts": {
+        "bad": 2,
+        "bad_in_issue": 2,
+        "issue_frames": 166,
+        "issue_bad": 2,
+        "bad_x": 0,
+        "bad_x_in_issue": 0
+      },
+      "final_loss_events": [],
+      "keyframes": {
+        "0": "oracle-prompt"
+      },
+      "timing": {
+        "wall_seconds": 69.9,
+        "sam_seconds": 68.9,
+        "image_seconds": 0.1,
+        "health_seconds": 0.3,
+        "sam_frames": 525,
+        "rebuilds": 1
+      },
+      "rounds_detail": [
+        {
+          "round": 0,
+          "frames": 526,
+          "gt_frames": 526,
+          "gt_empty_frames": 0,
+          "mean_iou": 0.9662,
+          "hit_rate": 1.0,
+          "good_rate": 0.9962,
+          "absent_acc": null,
+          "bad_frames": 2,
+          "bad": 2,
+          "bad_in_issue": 2,
+          "issue_frames": 166,
+          "issue_bad": 2,
+          "n_issues": 4,
+          "bad_x": 0,
+          "bad_x_in_issue": 0,
+          "loss_events": [],
+          "loss_events_caught": [],
+          "edits": []
+        }
+      ],
+      "edits_detail": []
+    },
+    {
+      "seq": "sub4",
+      "frames": 132,
+      "prompt": {
+        "frame": 0,
+        "mask_box_iou": 1.0,
+        "score": 0.9688
+      },
+      "gt_frames": 132,
+      "gt_empty_frames": 0,
+      "mean_iou": 0.9634,
+      "hit_rate": 1.0,
+      "good_rate": 1.0,
+      "absent_acc": null,
+      "bad_frames": 0,
+      "pass1": {
+        "mean_iou": 0.9634,
+        "hit_rate": 1.0,
+        "good_rate": 1.0,
+        "absent_acc": null,
+        "bad": 0,
+        "n_issues": 4,
+        "loss_events": [],
+        "loss_events_caught": []
+      },
+      "edits": 0,
+      "edits_per_100": 0.0,
+      "edit_kinds": {},
+      "views": 40,
+      "rounds": 0,
+      "budget_exhausted": false,
+      "remaining_issues": [
+        {
+          "track_id": "sub4",
+          "start": 3,
+          "end": 3,
+          "worst_frame": 3,
+          "kind": "scope",
+          "n_frames": 1,
+          "n_lost": 0,
+          "reasons": {
+            "step_grow": 1
+          },
+          "signals": {
+            "severity": 0.132,
+            "reasons": "step_grow",
+            "origin": 0,
+            "area": 21395,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 1.71,
+            "kf_area": 1.3309,
+            "aspect_log": 0.2823,
+            "fill_ratio": 0.9616,
+            "step_area": 1.9001,
+            "step_rel": 2.0671,
+            "trend": 0.9192,
+            "jump": 0.2126
+          }
+        },
+        {
+          "track_id": "sub4",
+          "start": 33,
+          "end": 39,
+          "worst_frame": 37,
+          "kind": "drift",
+          "n_frames": 5,
+          "n_lost": 0,
+          "reasons": {
+            "win_shrink": 3,
+            "step_shrink": 1,
+            "step_grow": 1
+          },
+          "signals": {
+            "severity": 1.4517,
+            "reasons": "win_shrink",
+            "origin": 0,
+            "area": 8067,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.2783,
+            "kf_area": 0.5018,
+            "aspect_log": 0.4326,
+            "fill_ratio": 0.9829,
+            "step_area": 0.8768,
+            "step_rel": 0.9991,
+            "trend": 0.8776,
+            "jump": 0.0391
+          }
+        },
+        {
+          "track_id": "sub4",
+          "start": 53,
+          "end": 63,
+          "worst_frame": 55,
+          "kind": "drift",
+          "n_frames": 9,
+          "n_lost": 0,
+          "reasons": {
+            "kf_shrink": 9
+          },
+          "signals": {
+            "severity": 0.8268,
+            "reasons": "kf_shrink",
+            "origin": 0,
+            "area": 3922,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.6447,
+            "kf_area": 0.244,
+            "aspect_log": 0.2228,
+            "fill_ratio": 1.0138,
+            "step_area": 0.9439,
+            "step_rel": 1.0199,
+            "trend": 0.9256,
+            "jump": 0.885
+          }
+        },
+        {
+          "track_id": "sub4",
+          "start": 88,
+          "end": 122,
+          "worst_frame": 110,
+          "kind": "drift",
+          "n_frames": 33,
+          "n_lost": 0,
+          "reasons": {
+            "kf_shrink": 33,
+            "step_shrink": 1
+          },
+          "signals": {
+            "severity": 3.5994,
+            "reasons": "kf_shrink",
+            "origin": 0,
+            "area": 1961,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.6312,
+            "kf_area": 0.122,
+            "aspect_log": 0.3766,
+            "fill_ratio": 1.0109,
+            "step_area": 0.7207,
+            "step_rel": 0.7042,
+            "trend": 1.0235,
+            "jump": 1.3535
+          }
+        }
+      ],
+      "recall_pass1": null,
+      "precision_pass1": 0.0,
+      "recall_pooled": null,
+      "recall_pass1_excl_label_errors": null,
+      "recall_pooled_excl_label_errors": null,
+      "label_error_frames": [],
+      "precision_pooled": 0.0,
+      "pooled_counts": {
+        "bad": 0,
+        "bad_in_issue": 0,
+        "issue_frames": 54,
+        "issue_bad": 0,
+        "bad_x": 0,
+        "bad_x_in_issue": 0
+      },
+      "final_loss_events": [],
+      "keyframes": {
+        "0": "oracle-prompt"
+      },
+      "timing": {
+        "wall_seconds": 16.9,
+        "sam_seconds": 16.5,
+        "image_seconds": 0.1,
+        "health_seconds": 0.1,
+        "sam_frames": 131,
+        "rebuilds": 1
+      },
+      "rounds_detail": [
+        {
+          "round": 0,
+          "frames": 132,
+          "gt_frames": 132,
+          "gt_empty_frames": 0,
+          "mean_iou": 0.9634,
+          "hit_rate": 1.0,
+          "good_rate": 1.0,
+          "absent_acc": null,
+          "bad_frames": 0,
+          "bad": 0,
+          "bad_in_issue": 0,
+          "issue_frames": 54,
+          "issue_bad": 0,
+          "n_issues": 4,
+          "bad_x": 0,
+          "bad_x_in_issue": 0,
+          "loss_events": [],
+          "loss_events_caught": [],
+          "edits": []
+        }
+      ],
+      "edits_detail": []
+    },
+    {
+      "seq": "exit",
+      "frames": 526,
+      "prompt": {
+        "frame": 0,
+        "mask_box_iou": 0.984,
+        "score": 0.9727
+      },
+      "gt_frames": 438,
+      "gt_empty_frames": 88,
+      "mean_iou": 0.9468,
+      "hit_rate": 1.0,
+      "good_rate": 0.9909,
+      "absent_acc": 0.9205,
+      "bad_frames": 11,
+      "pass1": {
+        "mean_iou": 0.9468,
+        "hit_rate": 1.0,
+        "good_rate": 0.9909,
+        "absent_acc": 0.7386,
+        "bad": 27,
+        "n_issues": 9,
+        "loss_events": [
+          [
+            28,
+            30
+          ],
+          [
+            101,
+            104
+          ],
+          [
+            138,
+            142
+          ],
+          [
+            149,
+            151
+          ],
+          [
+            197,
+            199
+          ]
+        ],
+        "loss_events_caught": [
+          [
+            28,
+            30
+          ],
+          [
+            101,
+            104
+          ],
+          [
+            138,
+            142
+          ],
+          [
+            149,
+            151
+          ],
+          [
+            197,
+            199
+          ]
+        ]
+      },
+      "edits": 10,
+      "edits_per_100": 1.9,
+      "edit_kinds": {
+        "absent": 10
+      },
+      "views": 19,
+      "rounds": 2,
+      "budget_exhausted": true,
+      "remaining_issues": [
+        {
+          "track_id": "exit",
+          "start": 39,
+          "end": 39,
+          "worst_frame": 39,
+          "kind": "scope",
+          "n_frames": 1,
+          "n_lost": 0,
+          "reasons": {
+            "step_grow": 1
+          },
+          "signals": {
+            "severity": 2.712,
+            "reasons": "step_grow",
+            "origin": 0,
+            "area": 16974,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.9857,
+            "kf_area": 1.2079,
+            "aspect_log": 0.0387,
+            "fill_ratio": 0.9938,
+            "step_area": 3.4388,
+            "step_rel": 3.9399,
+            "trend": 0.8728,
+            "jump": 0.5737
+          }
+        },
+        {
+          "track_id": "exit",
+          "start": 58,
+          "end": 60,
+          "worst_frame": 60,
+          "kind": "exit",
+          "n_frames": 3,
+          "n_lost": 0,
+          "reasons": {
+            "edge": 2,
+            "step_grow": 1
+          },
+          "signals": {
+            "severity": 2.659,
+            "reasons": "step_grow",
+            "origin": 0,
+            "area": 11716,
+            "empty_run": 0,
+            "touches_border": true,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 1.7173,
+            "kf_area": 0.8337,
+            "aspect_log": 0.7794,
+            "fill_ratio": 1.0224,
+            "step_area": 3.3275,
+            "step_rel": 3.888,
+            "trend": 0.8558,
+            "jump": 0.1604
+          }
+        },
+        {
+          "track_id": "exit",
+          "start": 138,
+          "end": 148,
+          "worst_frame": 145,
+          "kind": "lost",
+          "n_frames": 11,
+          "n_lost": 2,
+          "reasons": {
+            "edge": 9,
+            "empty": 2,
+            "step_grow": 1
+          },
+          "signals": {
+            "severity": 10.04,
+            "reasons": "empty",
+            "origin": 0,
+            "area": 0,
+            "empty_run": 2
+          }
+        },
+        {
+          "track_id": "exit",
+          "start": 166,
+          "end": 167,
+          "worst_frame": 166,
+          "kind": "exit",
+          "n_frames": 2,
+          "n_lost": 0,
+          "reasons": {
+            "edge": 2
+          },
+          "signals": {
+            "severity": 5.0439,
+            "reasons": "edge",
+            "origin": 0,
+            "area": 1534,
+            "empty_run": 0,
+            "touches_border": true,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.1822,
+            "kf_area": 0.1092,
+            "aspect_log": 1.6041,
+            "fill_ratio": 0.9918,
+            "step_area": 0.342,
+            "step_rel": 0.397,
+            "trend": 0.8613,
+            "jump": 0.1802
+          }
+        },
+        {
+          "track_id": "exit",
+          "start": 171,
+          "end": 172,
+          "worst_frame": 171,
+          "kind": "exit",
+          "n_frames": 2,
+          "n_lost": 0,
+          "reasons": {
+            "edge": 2
+          },
+          "signals": {
+            "severity": 5.5967,
+            "reasons": "edge",
+            "origin": 0,
+            "area": 1336,
+            "empty_run": 0,
+            "touches_border": true,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.1586,
+            "kf_area": 0.0951,
+            "aspect_log": 1.8082,
+            "fill_ratio": 1.0143
+          }
+        },
+        {
+          "track_id": "exit",
+          "start": 195,
+          "end": 196,
+          "worst_frame": 196,
+          "kind": "exit",
+          "n_frames": 2,
+          "n_lost": 0,
+          "reasons": {
+            "edge": 2
+          },
+          "signals": {
+            "severity": 1.0794,
+            "reasons": "edge",
+            "origin": 0,
+            "area": 4133,
+            "empty_run": 0,
+            "touches_border": true,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.7041,
+            "kf_area": 0.2941,
+            "aspect_log": 0.3513,
+            "fill_ratio": 1.0392,
+            "step_area": 0.9864,
+            "step_rel": 1.0449,
+            "trend": 0.944,
+            "jump": 0.0073
+          }
+        },
+        {
+          "track_id": "exit",
+          "start": 200,
+          "end": 207,
+          "worst_frame": 206,
+          "kind": "exit",
+          "n_frames": 6,
+          "n_lost": 0,
+          "reasons": {
+            "edge": 6
+          },
+          "signals": {
+            "severity": 6.4402,
+            "reasons": "edge",
+            "origin": 0,
+            "area": 1082,
+            "empty_run": 0,
+            "touches_border": true,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.26,
+            "kf_area": 0.077,
+            "aspect_log": 1.4595,
+            "fill_ratio": 1.0231,
+            "step_area": 0.3971,
+            "step_rel": 0.4263,
+            "trend": 0.9314,
+            "jump": 0.1701
+          }
+        },
+        {
+          "track_id": "exit",
+          "start": 210,
+          "end": 227,
+          "worst_frame": 216,
+          "kind": "exit",
+          "n_frames": 18,
+          "n_lost": 0,
+          "reasons": {
+            "edge": 11,
+            "kf_shrink": 6,
+            "step_grow": 2
+          },
+          "signals": {
+            "severity": 8.2051,
+            "reasons": "edge",
+            "origin": 0,
+            "area": 696,
+            "empty_run": 0,
+            "touches_border": true,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.5084,
+            "kf_area": 0.0495,
+            "aspect_log": 1.6884,
+            "fill_ratio": 0.9307,
+            "step_area": 0.9508,
+            "step_rel": 1.1885,
+            "trend": 0.8,
+            "jump": 0.0073
+          }
+        },
+        {
+          "track_id": "exit",
+          "start": 239,
+          "end": 246,
+          "worst_frame": 240,
+          "kind": "exit",
+          "n_frames": 8,
+          "n_lost": 0,
+          "reasons": {
+            "edge": 8
+          },
+          "signals": {
+            "severity": 7.5153,
+            "reasons": "edge",
+            "origin": 0,
+            "area": 827,
+            "empty_run": 0,
+            "touches_border": true,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.1715,
+            "kf_area": 0.0588,
+            "aspect_log": 1.6672,
+            "fill_ratio": 0.9625,
+            "step_area": 0.9398,
+            "step_rel": 0.939,
+            "trend": 1.0008,
+            "jump": 0.1316
+          }
+        },
+        {
+          "track_id": "exit",
+          "start": 251,
+          "end": 253,
+          "worst_frame": 251,
+          "kind": "drift",
+          "n_frames": 3,
+          "n_lost": 0,
+          "reasons": {
+            "kf_shrink": 3
+          },
+          "signals": {
+            "severity": 0.1193,
+            "reasons": "kf_shrink",
+            "origin": 0,
+            "area": 4092,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 1.2002,
+            "kf_area": 0.2912,
+            "aspect_log": 0.0294,
+            "fill_ratio": 1.0107,
+            "step_area": 0.8944,
+            "step_rel": 0.8463,
+            "trend": 1.0569,
+            "jump": 0.5813
+          }
+        },
+        {
+          "track_id": "exit",
+          "start": 355,
+          "end": 469,
+          "worst_frame": 438,
+          "kind": "drift",
+          "n_frames": 113,
+          "n_lost": 0,
+          "reasons": {
+            "kf_shrink": 111,
+            "edge": 2,
+            "step_shrink": 1
+          },
+          "signals": {
+            "severity": 3.0944,
+            "reasons": "kf_shrink",
+            "origin": 0,
+            "area": 1945,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.7979,
+            "kf_area": 0.1384,
+            "aspect_log": 0.2837,
+            "fill_ratio": 0.9536,
+            "step_area": 0.9959,
+            "step_rel": 1.083,
+            "trend": 0.9196,
+            "jump": 0.0149
+          }
+        },
+        {
+          "track_id": "exit",
+          "start": 524,
+          "end": 525,
+          "worst_frame": 525,
+          "kind": "exit",
+          "n_frames": 2,
+          "n_lost": 0,
+          "reasons": {
+            "edge": 2
+          },
+          "signals": {
+            "severity": 6.107,
+            "reasons": "edge",
+            "origin": 0,
+            "area": 1176,
+            "empty_run": 0,
+            "touches_border": true,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.2094,
+            "kf_area": 0.0837,
+            "aspect_log": 1.4545,
+            "fill_ratio": 0.99,
+            "step_area": 0.7656,
+            "step_rel": 0.957,
+            "trend": 0.8,
+            "jump": 0.0326
+          }
+        }
+      ],
+      "recall_pass1": 1.0,
+      "precision_pass1": 0.1007,
+      "recall_pooled": 1.0,
+      "recall_pass1_excl_label_errors": 1.0,
+      "recall_pooled_excl_label_errors": 1.0,
+      "label_error_frames": [
+        393,
+        394
+      ],
+      "precision_pooled": 0.0782,
+      "pooled_counts": {
+        "bad": 53,
+        "bad_in_issue": 53,
+        "issue_frames": 678,
+        "issue_bad": 53,
+        "bad_x": 47,
+        "bad_x_in_issue": 47
+      },
+      "final_loss_events": [
+        [
+          138,
+          142
+        ]
+      ],
+      "keyframes": {
+        "0": "oracle-prompt",
+        "28": "absent",
+        "29": "absent",
+        "30": "absent",
+        "31": "absent",
+        "32": "absent",
+        "33": "absent",
+        "34": "absent",
+        "35": "absent",
+        "36": "absent",
+        "43": "absent",
+        "44": "absent",
+        "45": "absent",
+        "46": "absent",
+        "47": "absent",
+        "48": "absent",
+        "49": "absent",
+        "50": "absent",
+        "51": "absent",
+        "52": "absent",
+        "53": "absent",
+        "54": "absent",
+        "55": "absent",
+        "77": "absent",
+        "78": "absent",
+        "79": "absent",
+        "80": "absent",
+        "81": "absent",
+        "82": "absent",
+        "83": "absent",
+        "84": "absent",
+        "85": "absent",
+        "86": "absent",
+        "101": "absent",
+        "102": "absent",
+        "103": "absent",
+        "104": "absent",
+        "105": "absent",
+        "106": "absent",
+        "107": "absent",
+        "108": "absent",
+        "109": "absent",
+        "110": "absent",
+        "111": "absent",
+        "112": "absent",
+        "113": "absent",
+        "114": "absent",
+        "115": "absent",
+        "116": "absent",
+        "117": "absent",
+        "118": "absent",
+        "119": "absent",
+        "120": "absent",
+        "121": "absent",
+        "122": "absent",
+        "123": "absent",
+        "124": "absent",
+        "125": "absent",
+        "126": "absent",
+        "127": "absent",
+        "128": "absent",
+        "129": "absent",
+        "130": "absent",
+        "131": "absent",
+        "149": "absent",
+        "150": "absent",
+        "151": "absent",
+        "168": "absent",
+        "169": "absent",
+        "170": "absent",
+        "173": "absent",
+        "174": "absent",
+        "175": "absent",
+        "176": "absent",
+        "197": "absent",
+        "198": "absent",
+        "199": "absent",
+        "208": "absent",
+        "209": "absent",
+        "238": "absent"
+      },
+      "timing": {
+        "wall_seconds": 65.4,
+        "sam_seconds": 64.4,
+        "image_seconds": 0.1,
+        "health_seconds": 0.3,
+        "sam_frames": 525,
+        "rebuilds": 1
+      },
+      "rounds_detail": [
+        {
+          "round": 0,
+          "frames": 526,
+          "gt_frames": 438,
+          "gt_empty_frames": 88,
+          "mean_iou": 0.9468,
+          "hit_rate": 1.0,
+          "good_rate": 0.9909,
+          "absent_acc": 0.7386,
+          "bad_frames": 27,
+          "bad": 27,
+          "bad_in_issue": 27,
+          "issue_frames": 268,
+          "issue_bad": 27,
+          "n_issues": 9,
+          "bad_x": 25,
+          "bad_x_in_issue": 25,
+          "loss_events": [
+            [
+              28,
+              30
+            ],
+            [
+              101,
+              104
+            ],
+            [
+              138,
+              142
+            ],
+            [
+              149,
+              151
+            ],
+            [
+              197,
+              199
+            ]
+          ],
+          "loss_events_caught": [
+            [
+              28,
+              30
+            ],
+            [
+              101,
+              104
+            ],
+            [
+              138,
+              142
+            ],
+            [
+              149,
+              151
+            ],
+            [
+              197,
+              199
+            ]
+          ],
+          "edits": []
+        },
+        {
+          "round": 1,
+          "frames": 526,
+          "gt_frames": 438,
+          "gt_empty_frames": 88,
+          "mean_iou": 0.9468,
+          "hit_rate": 1.0,
+          "good_rate": 0.9909,
+          "absent_acc": 0.875,
+          "bad_frames": 15,
+          "bad": 15,
+          "bad_in_issue": 15,
+          "issue_frames": 235,
+          "issue_bad": 15,
+          "n_issues": 9,
+          "bad_x": 13,
+          "bad_x_in_issue": 13,
+          "loss_events": [
+            [
+              101,
+              104
+            ],
+            [
+              138,
+              142
+            ]
+          ],
+          "loss_events_caught": [
+            [
+              101,
+              104
+            ],
+            [
+              138,
+              142
+            ]
+          ],
+          "edits": [
+            {
+              "action": "absent",
+              "frames": [
+                197,
+                199
+              ],
+              "issue": [
+                195,
+                227,
+                197,
+                "lost"
+              ]
+            },
+            {
+              "action": "absent",
+              "frames": [
+                28,
+                36
+              ],
+              "issue": [
+                28,
+                60,
+                30,
+                "lost"
+              ]
+            },
+            {
+              "action": "absent",
+              "frames": [
+                149,
+                151
+              ],
+              "issue": [
+                101,
+                152,
+                150,
+                "lost"
+              ]
+            },
+            {
+              "action": "absent",
+              "frames": [
+                77,
+                86
+              ],
+              "issue": [
+                77,
+                86,
+                82,
+                "lost"
+              ]
+            },
+            {
+              "action": "absent",
+              "frames": [
+                173,
+                176
+              ],
+              "issue": [
+                166,
+                176,
+                174,
+                "lost"
+              ]
+            },
+            {
+              "action": "absent",
+              "frames": [
+                238,
+                238
+              ],
+              "issue": [
+                238,
+                246,
+                238,
+                "exit"
+              ]
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "frames": 526,
+          "gt_frames": 438,
+          "gt_empty_frames": 88,
+          "mean_iou": 0.9468,
+          "hit_rate": 1.0,
+          "good_rate": 0.9909,
+          "absent_acc": 0.9205,
+          "bad_frames": 11,
+          "bad": 11,
+          "bad_in_issue": 11,
+          "issue_frames": 175,
+          "issue_bad": 11,
+          "n_issues": 12,
+          "bad_x": 9,
+          "bad_x_in_issue": 9,
+          "loss_events": [
+            [
+              138,
+              142
+            ]
+          ],
+          "loss_events_caught": [
+            [
+              138,
+              142
+            ]
+          ],
+          "edits": [
+            {
+              "action": "absent",
+              "frames": [
+                101,
+                131
+              ],
+              "issue": [
+                101,
+                148,
+                118,
+                "lost"
+              ]
+            },
+            {
+              "action": "absent",
+              "frames": [
+                43,
+                55
+              ],
+              "issue": [
+                39,
+                60,
+                49,
+                "lost"
+              ]
+            },
+            {
+              "action": "absent",
+              "frames": [
+                168,
+                170
+              ],
+              "issue": [
+                166,
+                172,
+                169,
+                "lost"
+              ]
+            },
+            {
+              "action": "absent",
+              "frames": [
+                208,
+                209
+              ],
+              "issue": [
+                200,
+                227,
+                208,
+                "lost"
+              ]
+            }
+          ]
+        }
+      ],
+      "edits_detail": [
+        {
+          "action": "absent",
+          "frames": [
+            197,
+            199
+          ],
+          "issue": [
+            195,
+            227,
+            197,
+            "lost"
+          ]
+        },
+        {
+          "action": "absent",
+          "frames": [
+            28,
+            36
+          ],
+          "issue": [
+            28,
+            60,
+            30,
+            "lost"
+          ]
+        },
+        {
+          "action": "absent",
+          "frames": [
+            149,
+            151
+          ],
+          "issue": [
+            101,
+            152,
+            150,
+            "lost"
+          ]
+        },
+        {
+          "action": "absent",
+          "frames": [
+            77,
+            86
+          ],
+          "issue": [
+            77,
+            86,
+            82,
+            "lost"
+          ]
+        },
+        {
+          "action": "absent",
+          "frames": [
+            173,
+            176
+          ],
+          "issue": [
+            166,
+            176,
+            174,
+            "lost"
+          ]
+        },
+        {
+          "action": "absent",
+          "frames": [
+            238,
+            238
+          ],
+          "issue": [
+            238,
+            246,
+            238,
+            "exit"
+          ]
+        },
+        {
+          "action": "absent",
+          "frames": [
+            101,
+            131
+          ],
+          "issue": [
+            101,
+            148,
+            118,
+            "lost"
+          ]
+        },
+        {
+          "action": "absent",
+          "frames": [
+            43,
+            55
+          ],
+          "issue": [
+            39,
+            60,
+            49,
+            "lost"
+          ]
+        },
+        {
+          "action": "absent",
+          "frames": [
+            168,
+            170
+          ],
+          "issue": [
+            166,
+            172,
+            169,
+            "lost"
+          ]
+        },
+        {
+          "action": "absent",
+          "frames": [
+            208,
+            209
+          ],
+          "issue": [
+            200,
+            227,
+            208,
+            "lost"
+          ]
+        }
+      ]
+    },
+    {
+      "seq": "occl",
+      "frames": 526,
+      "prompt": {
+        "frame": 0,
+        "mask_box_iou": 1.0,
+        "score": 0.9688
+      },
+      "gt_frames": 522,
+      "gt_empty_frames": 4,
+      "mean_iou": 0.9562,
+      "hit_rate": 1.0,
+      "good_rate": 0.9962,
+      "absent_acc": 1.0,
+      "bad_frames": 2,
+      "pass1": {
+        "mean_iou": 0.9562,
+        "hit_rate": 1.0,
+        "good_rate": 0.9962,
+        "absent_acc": 0.0,
+        "bad": 6,
+        "n_issues": 5,
+        "loss_events": [
+          [
+            208,
+            211
+          ]
+        ],
+        "loss_events_caught": [
+          [
+            208,
+            211
+          ]
+        ]
+      },
+      "edits": 1,
+      "edits_per_100": 0.19,
+      "edit_kinds": {
+        "absent": 1
+      },
+      "views": 40,
+      "rounds": 1,
+      "budget_exhausted": false,
+      "remaining_issues": [
+        {
+          "track_id": "occl",
+          "start": 212,
+          "end": 228,
+          "worst_frame": 220,
+          "kind": "drift",
+          "n_frames": 17,
+          "n_lost": 0,
+          "reasons": {
+            "kf_shrink": 17
+          },
+          "signals": {
+            "severity": 0.7882,
+            "reasons": "kf_shrink",
+            "origin": 0,
+            "area": 3960,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.9343,
+            "kf_area": 0.2463,
+            "aspect_log": 0.2066,
+            "fill_ratio": 1.0071,
+            "step_area": 0.9661,
+            "step_rel": 0.9717,
+            "trend": 0.9942,
+            "jump": 0.0121
+          }
+        },
+        {
+          "track_id": "occl",
+          "start": 236,
+          "end": 237,
+          "worst_frame": 236,
+          "kind": "drift",
+          "n_frames": 2,
+          "n_lost": 0,
+          "reasons": {
+            "kf_shrink": 2
+          },
+          "signals": {
+            "severity": 0.0162,
+            "reasons": "kf_shrink",
+            "origin": 0,
+            "area": 4803,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.9896,
+            "kf_area": 0.2988,
+            "aspect_log": 0.0716,
+            "fill_ratio": 1.0366,
+            "step_area": 0.9911,
+            "step_rel": 0.9914,
+            "trend": 0.9997,
+            "jump": 0.4712
+          }
+        },
+        {
+          "track_id": "occl",
+          "start": 247,
+          "end": 254,
+          "worst_frame": 251,
+          "kind": "drift",
+          "n_frames": 8,
+          "n_lost": 0,
+          "reasons": {
+            "kf_shrink": 8
+          },
+          "signals": {
+            "severity": 0.5652,
+            "reasons": "kf_shrink",
+            "origin": 0,
+            "area": 4187,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.8342,
+            "kf_area": 0.2605,
+            "aspect_log": 0.144,
+            "fill_ratio": 1.0003,
+            "step_area": 0.8903,
+            "step_rel": 0.8997,
+            "trend": 0.9895,
+            "jump": 0.5186
+          }
+        },
+        {
+          "track_id": "occl",
+          "start": 349,
+          "end": 472,
+          "worst_frame": 437,
+          "kind": "drift",
+          "n_frames": 122,
+          "n_lost": 0,
+          "reasons": {
+            "kf_shrink": 122,
+            "step_shrink": 1
+          },
+          "signals": {
+            "severity": 3.5648,
+            "reasons": "kf_shrink",
+            "origin": 0,
+            "area": 1978,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.7829,
+            "kf_area": 0.123,
+            "aspect_log": 0.3709,
+            "fill_ratio": 0.976,
+            "step_area": 0.7198,
+            "step_rel": 0.7156,
+            "trend": 1.0058,
+            "jump": 1.4255
+          }
+        },
+        {
+          "track_id": "occl",
+          "start": 483,
+          "end": 488,
+          "worst_frame": 488,
+          "kind": "drift",
+          "n_frames": 6,
+          "n_lost": 0,
+          "reasons": {
+            "kf_shrink": 6
+          },
+          "signals": {
+            "severity": 0.1586,
+            "reasons": "kf_shrink",
+            "origin": 0,
+            "area": 4635,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.9611,
+            "kf_area": 0.2883,
+            "aspect_log": 0.2553,
+            "fill_ratio": 0.9908,
+            "step_area": 0.9936,
+            "step_rel": 1.0025,
+            "trend": 0.9911,
+            "jump": 0.0049
+          }
+        }
+      ],
+      "recall_pass1": 0.6667,
+      "precision_pass1": 0.0252,
+      "recall_pooled": 0.75,
+      "recall_pass1_excl_label_errors": 0.5,
+      "recall_pooled_excl_label_errors": 0.5,
+      "label_error_frames": [
+        393,
+        394
+      ],
+      "precision_pooled": 0.019,
+      "pooled_counts": {
+        "bad": 8,
+        "bad_in_issue": 6,
+        "issue_frames": 316,
+        "issue_bad": 6,
+        "bad_x": 4,
+        "bad_x_in_issue": 2
+      },
+      "final_loss_events": [],
+      "keyframes": {
+        "0": "oracle-prompt",
+        "208": "absent",
+        "209": "absent",
+        "210": "absent",
+        "211": "absent"
+      },
+      "timing": {
+        "wall_seconds": 69.2,
+        "sam_seconds": 67.8,
+        "image_seconds": 0.1,
+        "health_seconds": 0.6,
+        "sam_frames": 525,
+        "rebuilds": 1
+      },
+      "rounds_detail": [
+        {
+          "round": 0,
+          "frames": 526,
+          "gt_frames": 522,
+          "gt_empty_frames": 4,
+          "mean_iou": 0.9562,
+          "hit_rate": 1.0,
+          "good_rate": 0.9962,
+          "absent_acc": 0.0,
+          "bad_frames": 6,
+          "bad": 6,
+          "bad_in_issue": 4,
+          "issue_frames": 159,
+          "issue_bad": 4,
+          "n_issues": 5,
+          "bad_x": 4,
+          "bad_x_in_issue": 2,
+          "loss_events": [
+            [
+              208,
+              211
+            ]
+          ],
+          "loss_events_caught": [
+            [
+              208,
+              211
+            ]
+          ],
+          "edits": []
+        },
+        {
+          "round": 3,
+          "frames": 526,
+          "gt_frames": 522,
+          "gt_empty_frames": 4,
+          "mean_iou": 0.9562,
+          "hit_rate": 1.0,
+          "good_rate": 0.9962,
+          "absent_acc": 1.0,
+          "bad_frames": 2,
+          "bad": 2,
+          "bad_in_issue": 2,
+          "issue_frames": 157,
+          "issue_bad": 2,
+          "n_issues": 5,
+          "bad_x": 0,
+          "bad_x_in_issue": 0,
+          "loss_events": [],
+          "loss_events_caught": [],
+          "edits": [
+            {
+              "action": "absent",
+              "frames": [
+                208,
+                211
+              ],
+              "issue": [
+                210,
+                228,
+                211,
+                "drift"
+              ]
+            }
+          ]
+        }
+      ],
+      "edits_detail": [
+        {
+          "action": "absent",
+          "frames": [
+            208,
+            211
+          ],
+          "issue": [
+            210,
+            228,
+            211,
+            "drift"
+          ]
+        }
+      ]
+    },
+    {
+      "seq": "mid",
+      "frames": 526,
+      "prompt": {
+        "frame": 263,
+        "mask_box_iou": 1.0,
+        "score": 0.9648
+      },
+      "gt_frames": 526,
+      "gt_empty_frames": 0,
+      "mean_iou": 0.9574,
+      "hit_rate": 1.0,
+      "good_rate": 0.9962,
+      "absent_acc": null,
+      "bad_frames": 2,
+      "pass1": {
+        "mean_iou": 0.9574,
+        "hit_rate": 1.0,
+        "good_rate": 0.9962,
+        "absent_acc": null,
+        "bad": 2,
+        "n_issues": 2,
+        "loss_events": [],
+        "loss_events_caught": []
+      },
+      "edits": 0,
+      "edits_per_100": 0.0,
+      "edit_kinds": {},
+      "views": 2,
+      "rounds": 0,
+      "budget_exhausted": false,
+      "remaining_issues": [
+        {
+          "track_id": "mid",
+          "start": 9,
+          "end": 9,
+          "worst_frame": 9,
+          "kind": "drift",
+          "n_frames": 1,
+          "n_lost": 0,
+          "reasons": {
+            "win_shrink": 1
+          },
+          "signals": {
+            "severity": 0.2406,
+            "reasons": "win_shrink",
+            "origin": 263,
+            "area": 11100,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.3766,
+            "kf_area": 1.8703,
+            "aspect_log": 0.0783,
+            "fill_ratio": 0.9911,
+            "step_area": 0.5999,
+            "step_rel": 0.6488,
+            "trend": 0.9247,
+            "jump": 0.266
+          }
+        },
+        {
+          "track_id": "mid",
+          "start": 414,
+          "end": 414,
+          "worst_frame": 414,
+          "kind": "drift",
+          "n_frames": 1,
+          "n_lost": 0,
+          "reasons": {
+            "step_shrink": 1
+          },
+          "signals": {
+            "severity": 0.2411,
+            "reasons": "step_shrink",
+            "origin": 263,
+            "area": 2822,
+            "empty_run": 0,
+            "touches_border": false,
+            "n_components": 1,
+            "largest_frac": 1.0,
+            "win_area": 0.7716,
+            "kf_area": 0.4755,
+            "aspect_log": 0.0326,
+            "fill_ratio": 0.9629,
+            "step_area": 0.5139,
+            "step_rel": 0.4708,
+            "trend": 1.0917,
+            "jump": 1.2479
+          }
+        }
+      ],
+      "recall_pass1": 0.0,
+      "precision_pass1": 0.0,
+      "recall_pooled": 0.0,
+      "recall_pass1_excl_label_errors": null,
+      "recall_pooled_excl_label_errors": null,
+      "label_error_frames": [
+        393,
+        394
+      ],
+      "precision_pooled": 0.0,
+      "pooled_counts": {
+        "bad": 2,
+        "bad_in_issue": 0,
+        "issue_frames": 2,
+        "issue_bad": 0,
+        "bad_x": 0,
+        "bad_x_in_issue": 0
+      },
+      "final_loss_events": [],
+      "keyframes": {
+        "263": "oracle-prompt"
+      },
+      "timing": {
+        "wall_seconds": 68.6,
+        "sam_seconds": 67.7,
+        "image_seconds": 0.1,
+        "health_seconds": 0.3,
+        "sam_frames": 525,
+        "rebuilds": 1
+      },
+      "rounds_detail": [
+        {
+          "round": 0,
+          "frames": 526,
+          "gt_frames": 526,
+          "gt_empty_frames": 0,
+          "mean_iou": 0.9574,
+          "hit_rate": 1.0,
+          "good_rate": 0.9962,
+          "absent_acc": null,
+          "bad_frames": 2,
+          "bad": 2,
+          "bad_in_issue": 0,
+          "issue_frames": 2,
+          "issue_bad": 0,
+          "n_issues": 2,
+          "bad_x": 0,
+          "bad_x_in_issue": 0,
+          "loss_events": [],
+          "loss_events_caught": [],
+          "edits": []
+        }
+      ],
+      "edits_detail": []
+    }
+  ]
+}

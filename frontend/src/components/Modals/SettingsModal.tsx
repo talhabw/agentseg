@@ -36,6 +36,8 @@ export function SettingsModal() {
     setSizeMaxRatio,
     maskOpacity,
     setMaskOpacity,
+    followAgent,
+    setFollowAgent,
     embedModel,
     setEmbedModel,
     stopOnSizeMismatch,
@@ -256,6 +258,15 @@ export function SettingsModal() {
             </h3>
 
             <div className="space-y-3 pl-2">
+              <div className="flex items-center justify-between gap-4 border-b border-border/50 pb-3">
+                <div className="space-y-1">
+                  <Label>Follow the agent</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Keep the canvas on the frame the agent is currently inspecting.
+                  </p>
+                </div>
+                <Switch checked={followAgent} onCheckedChange={setFollowAgent} aria-label="Follow the agent" />
+              </div>
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
                   <Label>Mask Opacity</Label>

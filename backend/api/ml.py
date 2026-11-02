@@ -361,15 +361,27 @@ async def segment(request: SegmentRequest):
     segment_service = get_segment_service()
 
     if not segment_service.is_loaded():
-        raise HTTPException(
-            status_code=400, detail="SAM not loaded. Call /api/ml/sam/load first"
-        )
+        # sam_server is the default backend and is a shared model service, so
+        # connecting lazily keeps the legacy endpoint usable without a warm-up
+        # request.  The local backend retains its explicit load contract.
+        if getattr(segment_service, "backend", "local") in {"sam_server", "server", "remote"}:
+            try:
+                segment_service.load_model()
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"sam_server unavailable: {exc}")
+        else:
+            raise HTTPException(
+                status_code=400, detail="SAM not loaded. Call /api/ml/sam/load first"
+            )
 
     # Load image
     image_rgb, width, height = _load_image(request.image_id)
+    image_record = get_store().get_image_by_id(request.image_id)
 
     # Set image for segmentation
-    segment_service.set_image(image_rgb, str(request.image_id))
+    # sam_server consumes the source path; the local backend keeps using the
+    # ndarray cache and accepts the same identifier.
+    segment_service.set_image(image_rgb, image_record.path if image_record else str(request.image_id))
 
     # Convert points format
     pos_points = None

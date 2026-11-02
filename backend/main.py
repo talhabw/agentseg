@@ -4,6 +4,7 @@ FastAPI application entry point
 
 import sys
 import logging
+import os
 import traceback
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 
 from backend.config import CORS_ORIGINS, API_HOST, API_PORT
-from backend.api import projects, images, annotations, labels, ml, export, files, tracks, track_jobs
+from backend.api import projects, images, annotations, labels, ml, export, files, tracks, track_jobs, video_tracks, activity
 
 # Configure logging
 logging.basicConfig(
@@ -30,6 +31,9 @@ async def lifespan(app: FastAPI):
     """Application lifespan events."""
     # Startup
     logger.info("AutoSeg API starting...")
+    if os.getenv("VIDEO_CLOSE_STALE_SESSIONS") == "1":
+        from backend.api.video_tracks import close_stale_sessions
+        close_stale_sessions()
     yield
     # Shutdown
     logger.info("AutoSeg API shutting down...")
@@ -66,6 +70,8 @@ app.include_router(images.router, prefix="/api/images", tags=["Images"])
 app.include_router(annotations.router, prefix="/api/annotations", tags=["Annotations"])
 app.include_router(tracks.router, prefix="/api/tracks", tags=["Tracks"])
 app.include_router(track_jobs.router, prefix="/api/track", tags=["Tracking jobs"])
+app.include_router(video_tracks.router, prefix="/api/video", tags=["Video tracks"])
+app.include_router(activity.router, prefix="/api/activity", tags=["Activity"])
 app.include_router(labels.router, prefix="/api/labels", tags=["Labels"])
 app.include_router(ml.router, prefix="/api/ml", tags=["ML"])
 app.include_router(export.router, prefix="/api/export", tags=["Export"])

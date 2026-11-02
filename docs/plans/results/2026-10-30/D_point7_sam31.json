@@ -1,0 +1,78 @@
+{
+  "frames": 526,
+  "frames_with_gt": 526,
+  "mean_iou": 0.9582,
+  "median_iou": 0.9634,
+  "hit_rate": 1.0,
+  "zero_pred_frames": 0,
+  "fp_total": 0,
+  "frames_with_fp": 0,
+  "max_objects": 1,
+  "id_switches": 0,
+  "first_loss": null,
+  "name": "D_point7_sam31",
+  "model": "sam3.1",
+  "prompt": {
+    "kind": "points",
+    "frame_index": 0,
+    "points": [
+      [
+        0.264375,
+        0.540179
+      ],
+      [
+        0.2209375,
+        0.540179
+      ],
+      [
+        0.3078125,
+        0.540179
+      ],
+      [
+        0.264375,
+        0.4709824999999999
+      ],
+      [
+        0.264375,
+        0.6093754999999998
+      ],
+      [
+        0.19487500000000002,
+        0.7616078
+      ],
+      [
+        0.33387500000000003,
+        0.7616078
+      ]
+    ],
+    "point_labels": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      0
+    ],
+    "obj_id": 1,
+    "latency_sec": 0.029,
+    "n_objects_on_prompt_frame": 1
+  },
+  "prompt_frame": 0,
+  "direction": "forward",
+  "output_prob_thresh": null,
+  "fps_http": 8.76,
+  "propagate_sec": 60.1,
+  "wall_sec": 106.2,
+  "torch_peak_vram_gib": 18.65,
+  "torch_peak_vram_note": "torch.cuda.max_memory_allocated since server start (not reset per run)",
+  "torch_peak_before_run_gib": 18.65,
+  "box_vs_mask_bbox_max_px": 1.0,
+  "frames_missing": [],
+  "prime": {
+    "text": "giraffe",
+    "sec": 45.9,
+    "obj_ids_seen": []
+  },
+  "keep_cache": true
+}

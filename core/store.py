@@ -892,6 +892,78 @@ class ProjectStore:
             results.append((self._row_to_annotation(row), img))
         return results
 
+    def delete_propagated_annotations(
+        self, track_id: int, start_frame: Optional[int] = None, end_frame: Optional[int] = None
+    ) -> int:
+        """Delete derived video annotations for one track and optional inclusive range."""
+        query = """
+            DELETE FROM annotations WHERE track_id = ? AND source = 'propagated'
+              AND image_id IN (SELECT id FROM images WHERE project_id = (SELECT project_id FROM tracks WHERE id = ?)
+        """
+        params: list = [track_id, track_id]
+        if start_frame is not None:
+            query += " AND order_index >= ?"
+            params.append(start_frame)
+        if end_frame is not None:
+            query += " AND order_index <= ?"
+            params.append(end_frame)
+        query += ")"
+        cur = self.conn.execute(query, params)
+        self.commit()
+        return cur.rowcount
+
+    def add_track_absences(self, track_id: int, frames) -> None:
+        self.conn.executemany(
+            "INSERT OR REPLACE INTO track_absences (track_id, frame) VALUES (?, ?)",
+            [(track_id, int(f)) for f in frames],
+        )
+        self.commit()
+
+    def list_track_absences(self, track_id: int) -> list[int]:
+        rows = self.conn.execute(
+            "SELECT frame FROM track_absences WHERE track_id = ? ORDER BY frame", (track_id,)
+        ).fetchall()
+        return [int(r[0]) for r in rows]
+
+    def delete_track_absences(self, track_id: int, frames=None) -> None:
+        if frames is None:
+            self.conn.execute("DELETE FROM track_absences WHERE track_id = ?", (track_id,))
+        else:
+            self.conn.executemany(
+                "DELETE FROM track_absences WHERE track_id = ? AND frame = ?",
+                [(track_id, int(f)) for f in frames],
+            )
+        self.commit()
+
+    def create_issue(self, track_id: int, issue: dict, job_id: Optional[str] = None) -> int:
+        cur = self.conn.execute(
+            """INSERT INTO issues
+               (track_id, job_id, start_frame, end_frame, worst_frame, kind, n_frames, n_lost,
+                reasons_json, signals_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (track_id, job_id, issue["start"], issue["end"], issue["worst_frame"], issue["kind"],
+             issue.get("n_frames", 0), issue.get("n_lost", 0), json.dumps(issue.get("reasons", {})),
+             json.dumps(issue.get("signals", {}))),
+        )
+        self.commit()
+        return int(cur.lastrowid)
+
+    def list_issues(self, track_id: int) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM issues WHERE track_id = ? ORDER BY start_frame, id", (track_id,)
+        ).fetchall()
+        out = []
+        for row in rows:
+            d = dict(row)
+            d["reasons"] = json.loads(d.pop("reasons_json") or "{}")
+            d["signals"] = json.loads(d.pop("signals_json") or "{}")
+            out.append(d)
+        return out
+
+    def clear_issues(self, track_id: int) -> None:
+        self.conn.execute("DELETE FROM issues WHERE track_id = ?", (track_id,))
+        self.commit()
+
     def track_summaries(self, project_id: int) -> dict[int, dict]:
         """Per-track aggregate stats: annotation/anchor counts and frame span."""
         cursor = self.conn.execute(

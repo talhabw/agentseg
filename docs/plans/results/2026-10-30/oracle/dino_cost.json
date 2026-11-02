@@ -1,0 +1,81 @@
+{
+  "torpedo": {
+    "load_seconds": 1.6,
+    "calls": 526,
+    "ms_per_frame": 50.3,
+    "good": {
+      "n": 523,
+      "p5": 0.7851,
+      "p50": 0.8962
+    },
+    "bad": {
+      "n": 2,
+      "p50": 0.8124,
+      "p95": 0.8124
+    },
+    "auc_bad_vs_good": 0.9025
+  },
+  "sub4": {
+    "load_seconds": 0.7,
+    "calls": 132,
+    "ms_per_frame": 50.5,
+    "good": {
+      "n": 131,
+      "p5": 0.7844,
+      "p50": 0.8985
+    },
+    "bad": {
+      "n": 0,
+      "p50": null,
+      "p95": null
+    }
+  },
+  "exit": {
+    "load_seconds": 0.7,
+    "calls": 461,
+    "ms_per_frame": 49.4,
+    "good": {
+      "n": 433,
+      "p5": 0.7105,
+      "p50": 0.8247
+    },
+    "bad": {
+      "n": 27,
+      "p50": 0.7234,
+      "p95": 0.781
+    },
+    "auc_bad_vs_good": 0.8815
+  },
+  "occl": {
+    "load_seconds": 0.8,
+    "calls": 526,
+    "ms_per_frame": 41.8,
+    "good": {
+      "n": 519,
+      "p5": 0.7699,
+      "p50": 0.8952
+    },
+    "bad": {
+      "n": 6,
+      "p50": 0.5613,
+      "p95": 0.8163
+    },
+    "auc_bad_vs_good": 0.956
+  },
+  "mid": {
+    "load_seconds": 0.6,
+    "calls": 526,
+    "ms_per_frame": 35.6,
+    "good": {
+      "n": 523,
+      "p5": 0.6836,
+      "p50": 0.8563
+    },
+    "bad": {
+      "n": 2,
+      "p50": 0.7364,
+      "p95": 0.7364
+    },
+    "auc_bad_vs_good": 0.8432
+  }
+}

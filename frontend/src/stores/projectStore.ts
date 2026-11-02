@@ -30,10 +30,39 @@ interface ProjectState {
   nextImage: () => void;
   prevImage: () => void;
   tryOpenLastProject: () => Promise<boolean>;
+  syncCurrentProject: () => Promise<boolean>;
   resyncImages: () => Promise<{ added: number; removed: number }>;
 }
 
-export const useProjectStore = create<ProjectState>((set, get) => ({
+export const useProjectStore = create<ProjectState>((set, get) => {
+  let projectVersion = 0;
+  let syncRequest: Promise<boolean> | null = null;
+
+  const activateProject = async (project: Project | null, version: number) => {
+    if (version !== projectVersion) return;
+    useAnnotationStore.getState().resetForProject();
+    useUIStore.getState().setAgentOverlay(null);
+    useUIStore.getState().setAgentActive(false);
+    set({ project, images: [], currentImageIndex: 0, error: null, isLoading: Boolean(project) });
+    if (!project) {
+      useUIStore.getState().setLastProjectPath(null);
+      return;
+    }
+    try {
+      const [images, savedIndex] = await Promise.all([
+        api.listImages(),
+        api.getSetting('last_image_index').catch(() => null),
+      ]);
+      if (version !== projectVersion) return;
+      const index = parseInt(savedIndex ?? '0', 10) || 0;
+      set({ images, currentImageIndex: index >= 0 && index < images.length ? index : 0 });
+      useUIStore.getState().setLastProjectPath(project.root_dir);
+    } finally {
+      if (version === projectVersion) set({ isLoading: false });
+    }
+  };
+
+  return ({
   // Initial state
   project: null,
   images: [],
@@ -53,74 +82,50 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   // Actions
   createProject: async (projectDir, imageDir, name, yoloPreprocess) => {
+    const version = ++projectVersion;
     set({ isLoading: true, error: null });
     try {
       const project = await api.createProject(projectDir, imageDir, name, yoloPreprocess);
-      useAnnotationStore.getState().invalidateAnnotations();
-      set({ project, currentImageIndex: 0 });
-      await get().loadImages();
-      // Save last project path
-      useUIStore.getState().setLastProjectPath(projectDir);
+      await activateProject(project, version);
       return project;
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : 'Failed to create project' });
+      if (version === projectVersion) set({ error: err instanceof Error ? err.message : 'Failed to create project' });
       throw err;
     } finally {
-      set({ isLoading: false });
+      if (version === projectVersion) set({ isLoading: false });
     }
   },
 
   openProject: async (projectDir) => {
+    const version = ++projectVersion;
     set({ isLoading: true, error: null });
     try {
       const project = await api.openProject(projectDir);
-      useAnnotationStore.getState().invalidateAnnotations();
-      
-      // Try to restore last image index
-      let lastIndex = 0;
-      try {
-        const savedIndex = await api.getSetting('last_image_index');
-        if (savedIndex !== null) {
-          lastIndex = parseInt(savedIndex, 10) || 0;
-        }
-      } catch {
-        // Ignore errors getting last index
-      }
-      
-      set({ project, currentImageIndex: lastIndex });
-      await get().loadImages();
-      
-      // Validate index is within bounds
-      const { images } = get();
-      if (lastIndex >= images.length) {
-        set({ currentImageIndex: 0 });
-      }
-      
-      // Save last project path
-      useUIStore.getState().setLastProjectPath(projectDir);
+      await activateProject(project, version);
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : 'Failed to open project' });
+      if (version === projectVersion) set({ error: err instanceof Error ? err.message : 'Failed to open project' });
       throw err;
     } finally {
-      set({ isLoading: false });
+      if (version === projectVersion) set({ isLoading: false });
     }
   },
 
   closeProject: async () => {
+    const version = ++projectVersion;
     try {
       await api.closeProject();
     } finally {
-      useAnnotationStore.getState().invalidateAnnotations();
-      set({ project: null, images: [], currentImageIndex: 0, error: null });
+      await activateProject(null, version);
     }
   },
 
   loadImages: async () => {
+    const version = projectVersion;
     try {
       const images = await api.listImages();
-      set({ images });
+      if (version === projectVersion) set({ images });
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : 'Failed to load images' });
+      if (version === projectVersion) set({ error: err instanceof Error ? err.message : 'Failed to load images' });
     }
   },
 
@@ -149,6 +154,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   // Try to open last project from localStorage
   tryOpenLastProject: async () => {
+    // The backend's current project is authoritative. This matters when a
+    // project was created by the CLI while the browser still has an older
+    // lastProjectPath persisted locally.
+    try {
+      await get().syncCurrentProject();
+      if (get().project) return true;
+    } catch {
+      // Fall through to the persisted path when the backend has no project.
+    }
     const lastPath = useUIStore.getState().lastProjectPath;
     if (!lastPath) return false;
     
@@ -160,6 +174,23 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       useUIStore.getState().setLastProjectPath(null);
       return false;
     }
+  },
+
+  // Adopt CLI changes without POST /open: reopening would tear down SAM jobs.
+  // root_dir is essential here: every independent project DB can have id=1.
+  syncCurrentProject: () => {
+    if (syncRequest) return syncRequest;
+    if (get().isLoading) return Promise.resolve(false);
+    const version = projectVersion;
+    syncRequest = (async () => {
+      const current = await api.getCurrentProject();
+      if (version !== projectVersion) return false;
+      if (current?.root_dir === get().project?.root_dir && current?.id === get().project?.id &&
+        (!current || current.image_count === get().images.length)) return false;
+      await activateProject(current, ++projectVersion);
+      return true;
+    })().finally(() => { syncRequest = null; });
+    return syncRequest;
   },
 
   resyncImages: async () => {
@@ -185,4 +216,5 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       throw err;
     }
   },
-}));
+  });
+});

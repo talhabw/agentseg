@@ -61,6 +61,10 @@ async def create_project(request: CreateProjectRequest):
     global _current_store, _current_project
 
     try:
+        if _current_store is not None:
+            from backend.api.video_tracks import close_engine_for_db
+            close_engine_for_db(_current_store.db_path)
+            _current_store.close()
         project = ProjectStore.create_project(
             project_dir=request.project_dir,
             image_dir=request.image_dir,
@@ -91,6 +95,10 @@ async def open_project(request: OpenProjectRequest):
         raise HTTPException(status_code=404, detail="Project database not found")
 
     try:
+        if _current_store is not None:
+            from backend.api.video_tracks import close_engine_for_db
+            close_engine_for_db(_current_store.db_path)
+            _current_store.close()
         project = ProjectStore.load_project(request.project_dir)
         _current_store = ProjectStore(project.db_path)
         _current_project = project
@@ -128,6 +136,8 @@ async def close_project():
     global _current_store, _current_project
 
     if _current_store:
+        from backend.api.video_tracks import close_engine_for_db
+        close_engine_for_db(_current_store.db_path)
         _current_store.close()
     _current_store = None
     _current_project = None
