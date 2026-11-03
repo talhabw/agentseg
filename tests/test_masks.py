@@ -124,3 +124,24 @@ def test_prune_thin_artifacts_falls_back_for_thin_objects():
     cleaned = prune_thin_artifacts(mask)
 
     np.testing.assert_array_equal(cleaned, mask)
+
+
+def test_drop_specks_keeps_the_object_and_its_large_parts():
+    from core.masks import drop_specks, mask_to_bbox
+    mask = np.zeros((100, 100), bool)
+    mask[10:40, 10:60] = True      # the object, 1500 px
+    mask[50:70, 10:30] = True      # a second large part (occluded object), 400 px
+    mask[95, 95] = True            # a speck far away
+    mask[90:92, 5:7] = True        # another speck
+    cleaned = drop_specks(mask)
+    assert cleaned[10:40, 10:60].all() and cleaned[50:70, 10:30].all()
+    assert not cleaned[95, 95] and not cleaned[90:92, 5:7].any()
+    assert mask_to_bbox(cleaned) == [10, 10, 60, 70]
+
+
+def test_drop_specks_never_empties_a_tiny_mask():
+    from core.masks import drop_specks
+    mask = np.zeros((20, 20), bool)
+    mask[2:4, 2:4] = True
+    mask[10, 10] = True
+    assert drop_specks(mask)[2:4, 2:4].all()

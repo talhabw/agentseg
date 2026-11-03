@@ -1,4 +1,6 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { useAgentStore } from '../../agent/agentStore';
+import { useReplayVisibility } from '../../agent/useAgentRuntime';
 import { useAnnotationStore } from '../../stores/annotationStore';
 import { Button } from "@/components/ui/button";
 import {
@@ -53,8 +55,31 @@ function ColorSwatch({ label, onColorChange }: { label: Label; onColorChange: (l
   );
 }
 
+/**
+ * When the agent adds a label it appears here the way a typed one would: the
+ * name is written into the picker and a note says who added it.
+ */
+function useAgentTyping(name: string | undefined, startedAt: number | undefined): { text: string | null; note: boolean } {
+  const [now, setNow] = useState(() => performance.now());
+  const active = name != null && startedAt != null && now - startedAt < 4000;
+  useEffect(() => {
+    if (name == null || startedAt == null) return;
+    let raf = 0;
+    const loop = (t: number) => { setNow(t); if (t - startedAt < 4000) raf = requestAnimationFrame(loop); };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [name, startedAt]);
+  if (!active || name == null || startedAt == null) return { text: null, note: false };
+  const chars = Math.min(name.length, Math.floor(Math.max(0, now - startedAt) / 38));
+  return { text: chars < name.length ? name.slice(0, chars) : null, note: true };
+}
+
 export function LabelPicker() {
-  const { labels, selectedLabelId, selectLabel, createLabel, updateLabel } = useAnnotationStore();
+  const { labels: storedLabels, selectedLabelId, selectLabel, createLabel, updateLabel } = useAnnotationStore();
+  const { labelVisible } = useReplayVisibility();
+  const labels = storedLabels.filter(labelVisible);
+  const recentLabel = useAgentStore((s) => s.recentLabel);
+  const typing = useAgentTyping(recentLabel?.name, recentLabel?.t0);
   const [open, setOpen] = useState(false);
   const [searchValue, setSearchValue] = useState("");
   const [isCreating, setIsCreating] = useState(false);
@@ -99,16 +124,25 @@ export function LabelPicker() {
     }
   }, [searchValue, hasExactMatch, handleCreateLabel]);
 
+  const agentNote = typing.note && selectedLabel?.name === recentLabel?.name;
+
   return (
+    <>
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
           role="combobox"
+          data-agent-anchor="label-picker"
           aria-expanded={open}
           className="w-full justify-between"
         >
-          {selectedLabel ? (
+          {typing.text != null ? (
+            <div className="flex items-center gap-2 truncate">
+              <span className="w-3 h-3 flex-shrink-0" />
+              <span>{typing.text}<span className="ml-px inline-block h-[1.05em] w-px translate-y-[2px] bg-foreground/70" /></span>
+            </div>
+          ) : selectedLabel ? (
             <div className="flex items-center gap-2 truncate">
               <span
                 className="w-3 h-3 rounded-full flex-shrink-0"
@@ -190,5 +224,7 @@ export function LabelPicker() {
         </Command>
       </PopoverContent>
     </Popover>
+    {agentNote && <p className="mt-1.5 text-[11px] text-muted-foreground">Added by Muse</p>}
+    </>
   );
 }

@@ -42,7 +42,8 @@ describe('bitmap ownership', () => {
   });
 
   it('hides the previous photo and overlays while the next bitmap is pending', () => {
-    vi.mocked(getCachedImage).mockReturnValueOnce(bitmap('/old.jpg')).mockReturnValue(null);
+    const first = getOptimizedImageUrl(1, 2048, 85, '/old');
+    vi.mocked(getCachedImage).mockImplementation((src) => (src === first ? bitmap('/old.jpg') : null));
     vi.mocked(preloadImage).mockReturnValue(new Promise(() => {}));
     render(<ImageCanvas />);
     expect(screen.getByTestId('bitmap')).toBeTruthy();

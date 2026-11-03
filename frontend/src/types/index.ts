@@ -31,7 +31,7 @@ export interface Annotation {
   bbox: [number, number, number, number] | null;  // [x1, y1, x2, y2]
   polygon: number[] | null;
   mask_rle: object | null;
-  source: 'manual' | 'propagated' | 'tracked' | 'yolo' | 'yolo_sam' | 'yolo_seg';
+  source: 'manual' | 'sam' | 'propagated' | 'tracked' | 'yolo' | 'yolo_sam' | 'yolo_seg';
   confidence: number | null;
   status: 'approved' | 'pending' | 'needs_review' | 'rejected';
   track_id?: number | null;  // Object identity (tracks.id); null = untracked

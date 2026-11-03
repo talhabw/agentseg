@@ -23,6 +23,14 @@ import {
   Search,
 } from 'lucide-react';
 
+/** Projects the CLI creates are all "Untitled Project"; their folder says more. */
+function projectTitle(project: { name: string; root_dir: string }): string {
+  if (project.name && project.name !== 'Untitled Project') return project.name;
+  const parts = project.root_dir.split('/').filter(Boolean);
+  const last = parts.at(-1) ?? project.name;
+  return /^(agentseg|autoseg)_project$/.test(last) && parts.length > 1 ? parts.at(-2)! : last;
+}
+
 export function Header() {
   const {
     mode,
@@ -81,8 +89,8 @@ export function Header() {
         {project && (
           <>
             <Separator orientation="vertical" className="h-6 mx-1" />
-            <span className="text-xs text-muted-foreground font-mono truncate max-w-[150px]" title={project.name}>
-              {project.name}
+            <span className="text-xs text-muted-foreground font-mono truncate max-w-[220px]" title={project.root_dir}>
+              {projectTitle(project)}
             </span>
           </>
         )}

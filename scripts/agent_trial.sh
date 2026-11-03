@@ -29,10 +29,21 @@ if ! .venv/bin/agentseg status >/tmp/agentseg_trial_${SEQ}_status.json 2>/tmp/ag
   .venv/bin/agentseg up >/tmp/agentseg_trial_${SEQ}_up.json 2>/tmp/agentseg_trial_${SEQ}_up.err
 fi
 
+# AGENT_RUNNER=muse (default): Muse Code via the backend launcher, which also
+# streams the agent's tool calls into the web UI. Needs META_API_KEY.
+# AGENT_RUNNER=claude: the original headless Claude Code run.
+RUNNER=${AGENT_RUNNER:-muse}
 START_NS=$(date +%s%N)
 set +e
-timeout --signal=TERM --kill-after=30s 2700s /home/emin/.nvm/current/bin/claude -p "$INSTRUCTION" --model sonnet --dangerously-skip-permissions --output-format stream-json --verbose >"$TRANSCRIPT"
-CLAUDE_EXIT=$?
+if [[ "$RUNNER" == claude ]]; then
+  timeout --signal=TERM --kill-after=30s 2700s /home/emin/.nvm/current/bin/claude -p "$INSTRUCTION" --model sonnet --dangerously-skip-permissions --output-format stream-json --verbose >"$TRANSCRIPT"
+  CLAUDE_EXIT=$?
+else
+  .venv/bin/agentseg agent run "$INSTRUCTION" --timeout 2700 >"$RUN_DIR/agent_run.json"
+  CLAUDE_EXIT=$?
+  MUSE_TRANSCRIPT=$(.venv/bin/python -c 'import json,sys; print(json.load(open(sys.argv[1])).get("run",{}).get("transcript",""))' "$RUN_DIR/agent_run.json" 2>/dev/null)
+  if [[ -n "$MUSE_TRANSCRIPT" && -f "$MUSE_TRANSCRIPT" ]]; then cp "$MUSE_TRANSCRIPT" "$TRANSCRIPT"; else : >"$TRANSCRIPT"; fi
+fi
 set -e
 END_NS=$(date +%s%N)
 
@@ -55,7 +66,7 @@ PY
 .venv/bin/python "$ROOT/scripts/score_export.py" "$EXPORT_DIR" "$MAPPED_GT" --json "$SCORE_JSON" >/tmp/agentseg_trial_${SEQ}_score.json || true
 
 .venv/bin/python - "$SEQ" "$RUN_DIR" "$STATE_DIR" "$TRANSCRIPT" "$RESULT" "$CLAUDE_EXIT" "$START_NS" "$END_NS" "$EXPORT_DIR" "$SCORE_JSON" <<'PY'
-import json, sys, re
+import json, os, sys, re
 from pathlib import Path
 
 seq, run, state, transcript, result, exit_code, start_ns, end_ns, export_dir, score_path = sys.argv[1:]
@@ -96,13 +107,23 @@ for line in Path(transcript).read_text(errors="replace").splitlines():
         usage = ev["message"].get("usage", usage) or usage
     if isinstance(ev.get("usage"), dict): usage = ev["usage"]
     if cost is None and isinstance(ev.get("message"), dict): cost = ev["message"].get("cost_usd")
+    # Muse Code `exec --json` records
+    pt, pl = ev.get("payload_type") or "", ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+    if pt == "tool.result" and (pl.get("correlation_facts") or {}).get("tool_name") == "read_file":
+        m = re.match(r"Read image file `([^`]+)`", pl.get("text") or "")
+        if m: viewed.add(m.group(1))
+    elif pt == "run.usage":
+        usage = {k: sum(int(x.get(k) or 0) for x in pl.get("models") or [])
+                 for k in ("input_tokens", "output_tokens", "cached_tokens", "reasoning_tokens")}
+    elif pt.startswith("run.terminal."):
+        final_message = pl.get("text") or pl.get("reason") or final_message
 
 pngs = [p for p in state.rglob("*.png")]
 final_sheet = max(pngs, key=lambda p: p.stat().st_mtime) if pngs else None
 out = {"sequence": seq, "export_dir": export_dir, "score": score,
        "cli_calls": counts, "png_images_opened": len(viewed), "wall_seconds": round((int(end_ns)-int(start_ns))/1e9, 2),
        "tokens": usage, "cost_usd": cost, "final_message": final_message,
-       "human_interventions": 0, "claude_exit": int(exit_code),
+       "human_interventions": 0, "runner": os.environ.get("AGENT_RUNNER", "muse"), "agent_exit": int(exit_code),
        "transcript": transcript, "final_sheet": str(final_sheet) if final_sheet else None}
 (run / "result.json").write_text(json.dumps(out, indent=2, ensure_ascii=False) + "\n")
 print(json.dumps(out, indent=2, ensure_ascii=False))

@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 from backend.api.projects import get_project, get_store
 from backend.api.activity import publish as publish_activity
-from core.masks import mask_area, mask_to_bbox, mask_to_rle, rle_to_mask
+from core.masks import drop_specks, mask_area, mask_to_bbox, mask_to_rle, rle_to_mask
 from core.polygons import mask_to_yolo_polygon
 from ml.sam3_video import FrameSet, Sam3Client, TrackEngine
 from ml.sam3_video.health import HealthConfig, assess
@@ -311,6 +311,21 @@ def _mark_dirty(engine: TrackEngine, lo: int, hi: int) -> None:
     engine._video_dirty_range = (lo, hi) if cur is None else (min(cur[0], lo), max(cur[1], hi))
 
 
+def _previews_dir() -> Path:
+    home = os.getenv("AGENTSEG_HOME") or os.getenv("AUTOSEG_HOME")
+    return Path(home or Path(__file__).resolve().parents[2] / ".agentseg") / "previews"
+
+
+def _save_preview_mask(p: Preview) -> None:
+    """Keep preview masks after the in-memory cache drops them, so a recorded
+    agent run can show its mask proposals again (see GET /previews/{id})."""
+    try:
+        d = _previews_dir(); d.mkdir(parents=True, exist_ok=True)
+        Image.fromarray(p.mask.astype(np.uint8) * 255).save(d / f"{p.id}.png", optimize=True)
+    except OSError:
+        pass
+
+
 def _get_preview(pid: str) -> Preview:
     p = _PREVIEWS.get(pid)
     if p is None or time.time() - p.created > _PREVIEW_TTL:
@@ -375,8 +390,10 @@ def segment_preview(req: SegmentRequest):
         close = getattr(client, "close", None)
         if close:
             close()
-    p = Preview(uuid.uuid4().hex[:16], get_project().id, req.frame, mask.astype(bool), float(score), mask_to_bbox(mask))
+    mask = drop_specks(mask)  # stray islands would stretch the bbox (and the label) past the object
+    p = Preview(uuid.uuid4().hex[:16], get_project().id, req.frame, mask, float(score), mask_to_bbox(mask))
     _PREVIEWS[p.id] = p
+    _save_preview_mask(p)
     while len(_PREVIEWS) > _PREVIEW_LIMIT:
         _PREVIEWS.popitem(last=False)
     try:
@@ -491,7 +508,7 @@ def add_video_keyframe(track_id: int, req: KeyframeRequest):
             close = getattr(c, "close", None)
             if close:
                 close()
-        mask = mask.astype(bool)
+        mask = drop_specks(mask)
     else:
         raise HTTPException(400, "preview_id or box is required")
     store = get_store(); track = store.get_track(track_id)
@@ -624,6 +641,35 @@ def _frame_statuses(track_id: int) -> dict[int, str]:
         elif img.order_index not in out:
             out[img.order_index] = "ok" if ann.status == "approved" else "review"
     return out
+
+
+@router.get("/previews/{preview_id}")
+def get_preview(preview_id: str):
+    """A mask proposal as RLE, from memory or from disk once it has expired."""
+    p = _PREVIEWS.get(preview_id)
+    if p is not None:
+        mask, frame, score, bbox = p.mask, p.frame, p.score, p.bbox
+    else:
+        if not preview_id.isalnum():
+            raise HTTPException(400, "bad preview id")
+        path = _previews_dir() / f"{preview_id}.png"
+        if not path.exists():
+            raise HTTPException(404, "Preview not found")
+        mask = np.array(Image.open(path)) > 0
+        frame, score, bbox = None, None, mask_to_bbox(mask)
+    return {"preview_id": preview_id, "frame": frame, "score": score, "bbox": bbox,
+            "mask_rle": mask_to_rle(mask)}
+
+
+@router.get("/tracks/{track_id}/frames")
+def track_frame_statuses(track_id: int):
+    """Per-frame health of a track for the timeline: keyframe | ok | review | absent | null."""
+    store = get_store()
+    if store.get_track(track_id) is None:
+        raise HTTPException(404, "Track not found")
+    n = store.get_image_count(get_project().id)
+    statuses = _frame_statuses(track_id)
+    return {"track_id": track_id, "n": n, "statuses": [statuses.get(f) for f in range(n)]}
 
 
 @router.get("/render/sheet")
