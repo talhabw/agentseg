@@ -12,6 +12,17 @@ export type FrameStatus = 'keyframe' | 'ok' | 'review' | 'absent' | 'empty';
 export type RunStatus = 'running' | 'done' | 'failed' | 'stopped';
 export type ActivityKind = 'thinking' | 'acting' | 'computing' | 'idle';
 
+/** The stages of a labeling run, in order; the run log groups its steps by them. */
+export type Phase = 'find' | 'mask' | 'track' | 'review' | 'export';
+export const PHASES: Phase[] = ['find', 'mask', 'track', 'review', 'export'];
+export const PHASE_NAMES: Record<Phase, string> = {
+  find: 'Find the object',
+  mask: 'First mask',
+  track: 'Track',
+  review: 'Review issues',
+  export: 'Export',
+};
+
 export interface FeedItem {
   id: string;
   kind: 'thought' | 'step' | 'report' | 'error';
@@ -19,6 +30,22 @@ export interface FeedItem {
   meta?: string;
   state?: 'running' | 'done' | 'failed';
   ts: number;
+  phase?: Phase;          // set on steps; a sentence belongs to the step it introduces
+  frame?: number;         // the frame the step is about (the run log links to it)
+  frames?: number[];      // an overview's frames
+}
+
+/** A spot SAM flagged after tracking, and what the agent did about it. */
+export interface IssueView {
+  key: string;
+  trackId: number;
+  id?: number;
+  start: number;
+  end: number;
+  worst: number;
+  kind?: string;
+  state: 'open' | 'reviewed' | 'fixed';
+  note?: string;
 }
 
 /** One box prompt on the canvas: cursor drags the box, clicks the points, SAM answers. */
@@ -92,6 +119,7 @@ export interface AgentRun {
   status: RunStatus;
   startedAt: number;      // event clock (seconds)
   endedAt?: number;
+  usage?: { calls?: number; input_tokens?: number; output_tokens?: number };
 }
 
 export interface ReplayState {
@@ -104,6 +132,26 @@ export interface ReplayState {
   hiddenLabels: string[]; // labels the recording creates, hidden until it does
   recordedTracks: number[]; // tracks the recording creates; other tracks show as they are
   synthetic: boolean;     // hand-made demo recording, not a real agent run
+}
+
+export type AgentView = 'bar' | 'caption' | 'sidebar';
+export const AGENT_VIEWS: { id: AgentView; name: string }[] = [
+  { id: 'bar', name: 'Top bar' },
+  { id: 'caption', name: 'Caption' },
+  { id: 'sidebar', name: 'Sidebar' },
+];
+
+/** Where Muse shows up while it works; `?agentview=` picks one for a link. */
+function initialAgentView(): AgentView {
+  const fromUrl = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('agentview');
+  if (fromUrl && AGENT_VIEWS.some((v) => v.id === fromUrl)) return fromUrl as AgentView;
+  try {
+    const saved = localStorage.getItem('agentseg-agent-view');
+    if (saved && AGENT_VIEWS.some((v) => v.id === saved)) return saved as AgentView;
+  } catch {
+    // no storage: default
+  }
+  return 'bar';
 }
 
 interface AgentState {
@@ -122,6 +170,9 @@ interface AgentState {
   action: AgentAction | null;
   cursor: CursorCue | null;
   logOpen: boolean;
+  phase: Phase | null;
+  issues: IssueView[];
+  view: AgentView;
 
   reset: (run: AgentRun | null) => void;
   patch: (fn: (s: AgentState) => Partial<AgentState>) => void;
@@ -147,6 +198,9 @@ export const useAgentStore = create<AgentState>()((set) => ({
   action: null,
   cursor: null,
   logOpen: false,
+  phase: null,
+  issues: [],
+  view: initialAgentView(),
 
   reset: (run) => set((s) => ({
     run,
@@ -160,6 +214,8 @@ export const useAgentStore = create<AgentState>()((set) => ({
     dismissed: false,
     action: null,
     cursor: null,
+    phase: null,
+    issues: [],
     replay: s.replay,
   })),
   patch: (fn) => set((s) => fn(s)),

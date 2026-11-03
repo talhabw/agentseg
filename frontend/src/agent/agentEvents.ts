@@ -2,10 +2,13 @@ import type { AgentActivityEvent } from '../hooks/useAgentActivity';
 import {
   useAgentStore,
   type AgentAction,
+  type AgentRun,
   type BoxBeat,
   type CursorTarget,
   type FeedItem,
   type FrameStatus,
+  type IssueView,
+  type Phase,
   type TrackView,
 } from './agentStore';
 import { beatSettlesAt, cueActsAt } from './beatPlan';
@@ -50,6 +53,7 @@ interface Scratch {
   trackLabels: Map<number, string>;     // label names announced by the CLI's track.created copy
   pendingSheet: { frames: number[]; trackId?: number } | null;  // rendered, not yet read by the agent
   lastFollowAt: number;                 // display clock of the last jump while tracking
+  phase: Phase;
 }
 
 const scratch: Scratch = {
@@ -67,6 +71,7 @@ const scratch: Scratch = {
   trackLabels: new Map(),
   pendingSheet: null,
   lastFollowAt: -Infinity,
+  phase: 'find',
 };
 
 /** After a box drag, let the mask settle on screen before the story moves on. */
@@ -118,6 +123,22 @@ export function resetAgentScratch() {
   scratch.tries.clear();
   scratch.lastThought = '';
   scratch.lastFollowAt = -Infinity;
+  scratch.phase = 'find';
+}
+
+const PHASE_ORDER: Phase[] = ['find', 'mask', 'track', 'review', 'export'];
+/** Move the run on to a later stage (never back: a fix during review stays in review). */
+function advancePhase(phase: Phase) {
+  if (PHASE_ORDER.indexOf(phase) > PHASE_ORDER.indexOf(scratch.phase)) scratch.phase = phase;
+  if (useAgentStore.getState().phase !== scratch.phase) useAgentStore.setState({ phase: scratch.phase });
+}
+
+/** Issues touching these frames were fixed (a keyframe, or marked not visible). */
+function fixIssues(trackId: number, frames: number[], note: string) {
+  useAgentStore.setState((s) => ({
+    issues: s.issues.map((i) => (i.trackId === trackId && frames.some((f) => f >= i.start && f <= i.end)
+      ? { ...i, state: 'fixed', note: i.note ?? note } : i)),
+  }));
 }
 
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
@@ -286,7 +307,7 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
 
   function handle(opts: ApplyOptions, soon: (() => void)[]) {
   const push = (item: Omit<FeedItem, 'id' | 'ts'> & { id?: string }) => {
-    const full: FeedItem = { id: item.id ?? seq, ts, ...item };
+    const full: FeedItem = { id: item.id ?? seq, ts, ...(item.kind === 'step' ? { phase: scratch.phase } : {}), ...item };
     store.patch((s) => ({ feed: [...s.feed, full] }));
     return full.id;
   };
@@ -387,9 +408,7 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
         if (!opts.hydrate) store.patch(() => ({ sheet: { frames: sheet.frames, trackId: sheet.trackId, t0: opts.now } }));
         push({ kind: 'step', state: 'done',
           text: sheet.trackId != null ? 'Looked over the track' : 'Looked over the sequence',
-          meta: plural(sheet.frames.length, 'frame') });
-      } else if (view?.kind === 'frame_overlay' && view.frame != null && view.track_id != null) {
-        push({ kind: 'step', state: 'done', text: `Checked frame ${human(view.frame)}` });
+          meta: plural(sheet.frames.length, 'frame'), frames: sheet.frames });
       }
       return;
     }
@@ -405,6 +424,7 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
     case 'label.created': {
       const name = String(ev.label ?? '');
       if (!name) return;
+      advancePhase('find');
       const show = () => {
         store.patch((s) => ({
           recentLabel: { name, id: num(ev.label_id), t0: performance.now() },
@@ -434,6 +454,8 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
       const f = num(ev.frame);
       if (f == null) return;
       focus(f, 'click', num(ev.track_id));
+      // With a track it is a check of the mask there; without, a look at the frame itself.
+      push({ kind: 'step', state: 'done', text: `${num(ev.track_id) != null ? 'Checked' : 'Looked at'} frame ${human(f)}`, frame: f });
       return;
     }
 
@@ -441,6 +463,7 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
       const f = num(ev.frame);
       const b = box(ev.bbox);
       if (f == null || !b) return;
+      advancePhase('mask');
       focus(f);
       const tries = (scratch.tries.get(f) ?? 0) + 1;
       scratch.tries.set(f, tries);
@@ -460,7 +483,7 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
       actionResult(['segment'], { detail: [`frame ${human(f)}`, (refine && clicks.length ? clicks : ['box', ...clicks]).join(', ')].join(' · ') });
       setActivity('acting', `Drawing a box on frame ${human(f)}`);
       scratch.segmentStep.set(f, push({ kind: 'step', state: 'running', text: `Mask proposal on frame ${human(f)}`,
-        meta: tries > 1 ? `try ${tries}` : undefined }));
+        meta: tries > 1 ? `try ${tries}` : undefined, frame: f }));
       return;
     }
 
@@ -496,8 +519,9 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
         labelId: num(ev.label_id) ?? tv.labelId });
       store.patch(() => ({ beat: null }));
       actionResult(['track create'], { result: `track ${id}`, state: 'done' });
+      advancePhase('mask');
       push({ kind: 'step', state: 'done', text: 'Created the track',
-        meta: typeof ev.label === 'string' ? ev.label : undefined });
+        meta: typeof ev.label === 'string' ? ev.label : undefined, frame: f });
       return;
     }
 
@@ -505,6 +529,7 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
       if (ev.action !== 'propagate') return;
       const id = num(ev.track_id);
       if (id == null) return;
+      advancePhase('track');
       putTrack({ ...track(id), propagating: true, progress: undefined });
       store.patch(() => ({ beat: null }));
       cue({ kind: 'trackRow', track: id }, false);
@@ -545,7 +570,7 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
       if (id == null) return;
       const tv = track(id);
       const statuses = [...tv.statuses];
-      const issues = (ev.issues as { start?: number; end?: number }[]) ?? [];
+      const issues = (ev.issues as { id?: number; start?: number; end?: number; worst_frame?: number; kind?: string }[]) ?? [];
       const flagged: number[] = [];
       for (const issue of issues) {
         if (issue.start == null || issue.end == null) continue;
@@ -554,6 +579,11 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
         }
       }
       putTrack({ ...tv, statuses, propagating: false, progress: undefined });
+      const views: IssueView[] = issues.filter((i) => i.start != null && i.end != null).map((i) => ({
+        key: `${id}:${i.id ?? i.start}`, trackId: id, id: i.id, start: i.start!, end: i.end!,
+        worst: i.worst_frame ?? i.start!, kind: i.kind, state: 'open' }));
+      store.patch((s) => ({ issues: [...s.issues.filter((i) => i.trackId !== id), ...views] }));
+      advancePhase('review');
       const meta = issues.length ? `${plural(issues.length, 'spot')} to review` : 'no issues';
       update(scratch.propagateStep.get(id), { state: 'done', meta });
       actionResult(['track propagate'], { result: meta, state: 'done' });
@@ -568,10 +598,22 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
       if (id == null) return;
       const tv = track(id);
       const statuses = [...tv.statuses];
-      for (const [a, b] of (ev.ranges as [number, number][]) ?? []) {
+      const reviewed = (ev.ranges as [number, number][]) ?? [];
+      for (const [a, b] of reviewed) {
         for (let f = a; f <= b && f < statuses.length; f++) if (statuses[f] === 'review') statuses[f] = 'ok';
       }
       putTrack({ ...tv, statuses });
+      const note = typeof ev.note === 'string' && ev.note ? ev.note : undefined;
+      const ids = Array.isArray(ev.issue_ids) ? (ev.issue_ids as number[]) : null;
+      store.patch((s) => ({
+        issues: s.issues.map((i) => (i.trackId === id && i.state === 'open'
+          && (ids && i.id != null ? ids.includes(i.id) : reviewed.some(([a, b]) => a <= i.end && b >= i.start))
+          ? { ...i, state: 'reviewed', note: note ?? i.note } : i)),
+      }));
+      if (reviewed.length) {
+        push({ kind: 'step', state: 'done', text: `Checked ${reviewed.length === 1 ? 'frames' : 'spots'} ${reviewed.map(([a, b]) => (a === b ? `${human(a)}` : `${human(a)}–${human(b)}`)).join(', ')}`,
+          meta: 'mask is right', frame: reviewed[0][0] });
+      }
       actionResult(['track review'], { result: String(ev.message ?? 'checked'), state: 'done' });
       return;
     }
@@ -604,7 +646,8 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
       putTrack({ ...tv, statuses, keyframes: [...new Set([...tv.keyframes, f])].sort((a, b) => a - b) });
       store.patch(() => ({ beat: null }));
       actionResult(['track refine'], { result: 'keyframe added', state: 'done' });
-      push({ kind: 'step', state: 'done', text: `Added a keyframe on frame ${human(f)}` });
+      fixIssues(id, [f], `keyframe on frame ${human(f)}`);
+      push({ kind: 'step', state: 'done', text: `Added a keyframe on frame ${human(f)}`, frame: f });
       return;
     }
 
@@ -619,7 +662,7 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
         if (statuses[f] === 'keyframe') statuses[f] = null;
         putTrack({ ...tv, statuses, keyframes: tv.keyframes.filter((k) => k !== f) });
         actionResult(['track keyframes --rm'], { result: 'removed', state: 'done' });
-        push({ kind: 'step', state: 'done', text: `Removed the keyframe on frame ${human(f)}` });
+        push({ kind: 'step', state: 'done', text: `Removed the keyframe on frame ${human(f)}`, frame: f });
       });
       return;
     }
@@ -636,13 +679,15 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
         putTrack({ ...tv, statuses });
         const text = `${frames.length === 1 ? 'frame' : 'frames'} ${ranges(frames)}`;
         actionResult(['track absent'], { result: text, state: 'done' });
-        push({ kind: 'step', state: 'done', text: `Marked ${text} as not visible` });
+        fixIssues(id, frames, 'marked not visible');
+        push({ kind: 'step', state: 'done', text: `Marked ${text} as not visible`, frame: Math.min(...frames) });
       });
       return;
     }
 
     case 'export.completed': {
       const format = typeof ev.format === 'string' ? ev.format.replace('yolo-seg', 'YOLO-seg') : undefined;
+      advancePhase('export');
       push({ kind: 'step', state: 'done', text: 'Exported the labels', meta: format });
       actionResult(['export'], { result: 'written', state: 'done' });
       setActivity('thinking', 'Writing the report');
@@ -664,7 +709,8 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
       const stopped = ev.status === 'stopped';
       if (scratch.pendingThought) { pushThought(scratch.pendingThought); scratch.pendingThought = null; }
       store.patch((s) => ({
-        run: s.run ? { ...s.run, status: failed ? 'failed' : stopped ? 'stopped' : 'done', endedAt: ts } : s.run,
+        run: s.run ? { ...s.run, status: failed ? 'failed' : stopped ? 'stopped' : 'done', endedAt: ts,
+          usage: (ev.usage as AgentRun['usage']) ?? s.run.usage } : s.run,
         beat: null,
         sheet: null,
         activity: { kind: 'idle', text: failed ? 'Stopped with an error' : stopped ? 'Stopped' : 'Finished' },
