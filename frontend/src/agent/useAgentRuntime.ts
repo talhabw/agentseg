@@ -39,7 +39,7 @@ function warmAhead(frame: number, direction: number) {
   if (ids.length) useAnnotationStore.getState().prefetchAnnotations(ids);
 }
 
-const REFRESH_TRACKS_ON = new Set(['track.finished', 'track.absent', 'keyframe.removed', 'track.created']);
+const REFRESH_TRACKS_ON = new Set(['track.finished', 'track.absent', 'issue.reviewed', 'keyframe.removed', 'track.created']);
 let refreshTimer = 0;
 
 async function loadServerTracks() {

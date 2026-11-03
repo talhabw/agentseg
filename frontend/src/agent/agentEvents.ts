@@ -562,6 +562,20 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
       return;
     }
 
+    case 'issue.reviewed': {
+      // The agent looked at these spots and the masks are right: no longer "review".
+      const id = num(ev.track_id);
+      if (id == null) return;
+      const tv = track(id);
+      const statuses = [...tv.statuses];
+      for (const [a, b] of (ev.ranges as [number, number][]) ?? []) {
+        for (let f = a; f <= b && f < statuses.length; f++) if (statuses[f] === 'review') statuses[f] = 'ok';
+      }
+      putTrack({ ...tv, statuses });
+      actionResult(['track review'], { result: String(ev.message ?? 'checked'), state: 'done' });
+      return;
+    }
+
     case 'mask.refine_started': {
       const f = num(ev.frame);
       if (f == null) return;

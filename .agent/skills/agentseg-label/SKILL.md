@@ -105,7 +105,7 @@ keyframe and a cyan box a propagated frame.
 
 | What you see | Action |
 |---|---|
-| Mask is correct; the object just got smaller, larger, rotated or moved fast | **Ignore.** Write one line why in your report. |
+| Mask is correct; the object just got smaller, larger, rotated or moved fast | **Mark it checked:** `agentseg track review T <issue_id> --note "<one line why>"`. Its frames turn from review to approved. |
 | Mask spills onto background or other objects, or has stray specks far away (huge bbox) | `segment` that frame with a tight box (+ `--neg` on the spill), then `track refine T <f> --preview P` |
 | Mask covers only part of the object, or sits on the wrong object | Same: `segment` → `track refine` |
 | Object is not visible at all (out of frame, fully occluded), but a mask exists | `track absent T <range>`. Find the range first with `sheet --track T --frames a-b`. |
@@ -121,8 +121,12 @@ Rules:
 - For `absent`, check the boundaries. Use `sheet --track T --frames a-b`
   around the range and mark only frames where the object is truly not visible
   (a sliver at the image edge still counts as visible).
-- Same issue still there after 2 fixes → stop fixing it and mention it in your
-  report.
+- Same issue still there after 2 fixes → stop fixing it, leave it open (do not
+  `review` it) and mention it in your report. Open issues are what a person
+  checks later.
+- Only `review` an issue after you looked at its frames. For a long issue,
+  check a `sheet --track T --frames a-b` of the range, not just `worst_frame`.
+  Several checked issues at once: `track review T 2,3,5 --note ...`.
 - Budget: about 10 fixes and about 40 viewed images per sequence. Prefer one
   `sheet` over many `view`s when scanning a range.
 
@@ -134,8 +138,8 @@ agentseg sheet --track T                 # border colours: yellow keyframe, gree
 agentseg export                          # YOLO-seg (default); --format yolo-detect|coco
 ```
 
-Look at the final sheet. Orange frames are fine if you inspected them and
-decided to ignore them. Red frames need attention, unless the object is truly
+Look at the final sheet. Orange frames belong to issues still open: check and
+`review` them, fix them, or leave them open on purpose for a person. Red frames need attention, unless the object is truly
 absent there; then mark them `absent`.
 
 ## 6. Report to the user
@@ -145,7 +149,7 @@ Short:
 - number of frames
 - keyframes (frames and why)
 - absent ranges
-- issues ignored, with one-line reasons
+- issues reviewed as fine, with one-line reasons
 - issues left unresolved
 - export path
 - final sheet path
@@ -162,6 +166,7 @@ agentseg segment <f> --box x0,y0,x1,y1 [--pos x,y]... [--neg x,y]... [--no-grid]
 agentseg track create --label L --preview P
 agentseg track propagate T [--full] [--start a --end b] [--no-wait]
 agentseg track issues T [--verbose]
+agentseg track review T <ids|all> [--note TEXT]
 agentseg track refine T <f> (--preview P | --box ... [--pos ..] [--neg ..]) [--no-propagate]
 agentseg track keyframes T [--rm F] [--no-propagate]
 agentseg track absent T <frames> [--no-propagate]

@@ -210,7 +210,7 @@ def _frames(spec: str) -> list[int]:
 def _compact_issue(i: dict) -> dict:
     out = {"id": i.get("id"), "start": i.get("start_frame", i.get("start")),
            "end": i.get("end_frame", i.get("end"))}
-    keep = ("worst_frame", "kind", "n_frames", "n_lost", "reasons")
+    keep = ("worst_frame", "kind", "n_frames", "n_lost", "reasons", "review")
     return {**out, **{k: i[k] for k in keep if k in i}}
 
 
@@ -660,6 +660,16 @@ def cmd_track_issues(api: Api, a) -> dict:
     return {"track_id": a.track, "issues": raw if a.verbose else [_compact_issue(i) for i in raw]}
 
 
+def cmd_track_review(api: Api, a) -> dict:
+    ids = None if a.issues == "all" else [int(x) for x in a.issues.split(",") if x.strip()]
+    res = api.post(f"/api/video/tracks/{a.track}/issues/review", {"issue_ids": ids, "by": "agent", "note": a.note})
+    _activity(api, "issue.reviewed", action="review_issues", status="completed", track_id=a.track,
+              issue_ids=res["reviewed"], ranges=res["ranges"], note=a.note,
+              message=f"Checked issue(s) {', '.join(map(str, res['reviewed'])) or '-'}: masks are right")
+    return {**res, "next": "export when open_issues is 0" if not res["open_issues"] else
+            "inspect the remaining issues"}
+
+
 def cmd_track_refine(api: Api, a) -> dict:
     _activity(api, "mask.refine_started", action="refine", status="running", track_id=a.track,
                   frame=a.frame, preview_id=a.preview, bbox=_box(a.box) if a.box else None,
@@ -859,6 +869,12 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("track", type=int)
     t.add_argument("--verbose", action="store_true", help="include raw signals")
     t.set_defaults(fn=cmd_track_issues)
+
+    t = ts.add_parser("review", help="mark issues you checked as fine (their frames become approved)")
+    t.add_argument("track", type=int)
+    t.add_argument("issues", help="issue ids, e.g. 2,5, or 'all' for every open issue")
+    t.add_argument("--note", help="one line why the masks are right")
+    t.set_defaults(fn=cmd_track_review)
 
     t = ts.add_parser("refine", help="add/replace a keyframe at FRAME, then re-propagate")
     t.add_argument("track", type=int); t.add_argument("frame", type=int)

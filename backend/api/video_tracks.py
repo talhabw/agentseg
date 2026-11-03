@@ -540,6 +540,33 @@ def remove_video_keyframe(track_id: int, frame: int):
     return {"track_id": track_id, "frame": frame, "removed": True}
 
 
+class IssueReviewRequest(BaseModel):
+    issue_ids: Optional[list[int]] = None  # None = all open issues
+    by: str = "agent"
+    note: Optional[str] = None
+
+
+@router.post("/tracks/{track_id}/issues/review")
+def review_track_issues(track_id: int, req: IssueReviewRequest):
+    """The reviewer looked at these issues and the masks are right: approve their
+    propagated frames so they stop showing as needs_review."""
+    store = get_store()
+    known = {i["id"] for i in store.list_issues(track_id)}
+    unknown = sorted(set(req.issue_ids or []) - known)
+    if unknown:
+        raise HTTPException(404, f"unknown issue id(s) for track {track_id}: {unknown}")
+    issues = store.review_issues(track_id, req.issue_ids, req.by, req.note)
+    approved = 0
+    for ann, image in store.list_track_annotations(track_id):
+        if ann.source == "propagated" and ann.status == "needs_review" and any(
+                i["start_frame"] <= image.order_index <= i["end_frame"] for i in issues):
+            store.update_annotation(ann.id, status="approved")
+            approved += 1
+    return {"track_id": track_id, "reviewed": [i["id"] for i in issues],
+            "ranges": [[i["start_frame"], i["end_frame"]] for i in issues], "frames_approved": approved,
+            "open_issues": sum(1 for i in store.list_issues(track_id) if not i.get("review"))}
+
+
 @router.post("/tracks/{track_id}/absent")
 def mark_track_absent(track_id: int, req: AbsentRequest):
     eng = _engine(); _track_loaded(eng, track_id)
@@ -574,7 +601,7 @@ def list_video_tracks():
                     "coverage": {"first": min(propagated) if propagated else None,
                                  "last": max(propagated) if propagated else None,
                                  "count": len(propagated)},
-                    "issue_count": len(store.list_issues(track.id)),
+                    "issue_count": sum(1 for i in store.list_issues(track.id) if not i.get("review")),
                     "job": job.snapshot() if job else None})
     return out
 
