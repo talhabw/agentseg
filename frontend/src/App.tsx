@@ -22,7 +22,6 @@ import { AgentCursor } from './agent/AgentCursor';
 import { agentPropagating } from './agent/agentStore';
 import { SheetOverlay } from './agent/SheetOverlay';
 import { TrackTimeline } from './agent/TrackTimeline';
-import { AgentBar } from './agent/AgentBar';
 import { AgentCaption } from './agent/AgentCaption';
 import { RunLog } from './agent/RunLog';
 import {
@@ -486,7 +485,6 @@ function AppContent() {
   return (
     <div className="h-screen flex flex-col">
       <Header />
-      <AgentBar />
       <div className="flex-1 min-h-0 flex overflow-hidden relative">
         <div className="flex-1 min-w-0 flex flex-col">
           <div className="relative flex-1 min-h-0 flex">

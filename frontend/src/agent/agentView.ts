@@ -1,13 +1,6 @@
-import { useAgentStore, type AgentView, type FeedItem } from './agentStore';
+import { useAgentStore, type FeedItem } from './agentStore';
 
-/** State the agent views read, and the layout choice. */
-
-const VIEW_KEY = 'agentseg-agent-view';
-
-export function setAgentView(view: AgentView) {
-  try { localStorage.setItem(VIEW_KEY, view); } catch { /* ignore */ }
-  useAgentStore.setState({ view });
-}
+/** State the agent views read. */
 
 /** True when the agent view should be on screen at all. */
 export function useAgentVisible(): boolean {

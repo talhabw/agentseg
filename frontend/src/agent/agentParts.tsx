@@ -5,17 +5,14 @@ import {
   PHASES,
   PHASE_NAMES,
   useAgentStore,
-  AGENT_VIEWS,
   type AgentAction,
   type Phase,
 } from './agentStore';
 import { setReplaySpeed, toggleReplay } from './replay';
-import { setAgentView } from './agentView';
 
 /**
  * Pieces every agent view shares: the sentence, the tool call, the stage of
- * the run and the controls. The layouts (top bar, caption, sidebar card) only
- * arrange them.
+ * the run and the controls.
  */
 
 export function Words({ text, className }: { text: string; className?: string }) {
@@ -125,22 +122,6 @@ export function Controls({ className }: { className?: string }) {
       {!running && !replay && (
         <button type="button" onClick={() => useAgentStore.getState().dismiss()} className={button}>Close</button>
       )}
-    </div>
-  );
-}
-
-/** Small switcher so the layouts can be compared side by side. */
-export function ViewSwitch() {
-  const view = useAgentStore((s) => s.view);
-  return (
-    <div className="flex items-center gap-0.5 text-[10.5px] text-muted-foreground" title="Where Muse shows up">
-      {AGENT_VIEWS.map((v) => (
-        <button key={v.id} type="button" onClick={() => setAgentView(v.id)}
-          className={cn('rounded px-1.5 py-0.5 hover:text-foreground', view === v.id && 'bg-muted text-foreground')}
-        >
-          {v.name}
-        </button>
-      ))}
     </div>
   );
 }

@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { AgentPanel } from '../../agent/AgentPanel';
 
 export function Sidebar() {
   const {
@@ -125,7 +124,6 @@ export function Sidebar() {
         </div>
       </div>
 
-      <AgentPanel />
     </aside>
   );
 }

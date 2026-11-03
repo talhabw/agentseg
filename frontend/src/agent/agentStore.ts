@@ -134,26 +134,6 @@ export interface ReplayState {
   synthetic: boolean;     // hand-made demo recording, not a real agent run
 }
 
-export type AgentView = 'bar' | 'caption' | 'sidebar';
-export const AGENT_VIEWS: { id: AgentView; name: string }[] = [
-  { id: 'bar', name: 'Top bar' },
-  { id: 'caption', name: 'Caption' },
-  { id: 'sidebar', name: 'Sidebar' },
-];
-
-/** Where Muse shows up while it works; `?agentview=` picks one for a link. */
-function initialAgentView(): AgentView {
-  const fromUrl = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('agentview');
-  if (fromUrl && AGENT_VIEWS.some((v) => v.id === fromUrl)) return fromUrl as AgentView;
-  try {
-    const saved = localStorage.getItem('agentseg-agent-view');
-    if (saved && AGENT_VIEWS.some((v) => v.id === saved)) return saved as AgentView;
-  } catch {
-    // no storage: default
-  }
-  return 'bar';
-}
-
 interface AgentState {
   run: AgentRun | null;
   activity: { kind: ActivityKind; text: string; progress?: { done: number; total: number } };
@@ -172,7 +152,6 @@ interface AgentState {
   logOpen: boolean;
   phase: Phase | null;
   issues: IssueView[];
-  view: AgentView;
 
   reset: (run: AgentRun | null) => void;
   patch: (fn: (s: AgentState) => Partial<AgentState>) => void;
@@ -200,7 +179,6 @@ export const useAgentStore = create<AgentState>()((set) => ({
   logOpen: false,
   phase: null,
   issues: [],
-  view: initialAgentView(),
 
   reset: (run) => set((s) => ({
     run,
