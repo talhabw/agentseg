@@ -74,7 +74,28 @@ Useful flags: `--no-sam`, `--no-ui`, `--rebuild`, `--host 0.0.0.0` (expose on th
 `agentseg down --all` also stops sam_server (frees the GPU).
 
 The same `agentseg` CLI drives labeling from the terminal or an agent
-(see `.agent/skills/agentseg-label/SKILL.md`).
+(see `.agent/skills/agentseg-label/SKILL.md`; `.agents/skills/agentseg-label`
+links to it so Muse Code finds it).
+
+**Labeling agent (Muse Code).** The backend runs `muse exec --json` headless in
+the repo root (model `muse-spark-1.3-contributor`) and streams what the agent does into the
+web UI. Muse reads its API key from `META_API_KEY`:
+```bash
+read -rs META_API_KEY && export META_API_KEY   # paste the key, Enter; not echoed
+agentseg down && agentseg up                   # the backend must see the key
+agentseg agent run "label the torpedo" --images /path/to/frames
+```
+Instead of exporting, you can put `META_API_KEY=...` in `.env` (gitignored, see
+`.env.example`); the backend reads it when a run starts. `agentseg agent status`
+and `agentseg agent stop` manage runs. Settings: `AGENTSEG_AGENT_MODEL`,
+`AGENTSEG_AGENT_EFFORT`, `AGENTSEG_MUSE_BIN`, `AGENTSEG_AGENT_TIMEOUT`.
+Transcripts go to `.agentseg/agent_runs/<id>/`; open `http://localhost:5172/?replay=<id>`
+to play a run back in the UI.
+
+Example: [docs/media/muse-second-try.mp4](docs/media/muse-second-try.mp4) shows a
+replayed run. The first box also takes the stand's legs, so the agent marks
+the legs as background and the mask is fixed. The run's steps are scripted, but the
+masks come from SAM.
 
 **Frontend development** (hot reload, proxies `/api` to the backend on :5172):
 ```bash

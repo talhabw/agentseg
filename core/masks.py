@@ -298,3 +298,22 @@ def resize_mask(mask: np.ndarray, target_size: tuple[int, int]) -> np.ndarray:
         mask.astype(np.uint8), (target_w, target_h), interpolation=cv2.INTER_NEAREST
     )
     return resized.astype(np.uint8)
+
+
+def drop_specks(mask: np.ndarray, rel: float = 0.01) -> np.ndarray:
+    """Remove tiny islands that are not connected to the object.
+
+    The largest region always stays, and so does any region at least `rel` of
+    its size (an object split by an occluder keeps both halves). What goes is
+    the scatter SAM sometimes leaves around the object, which would otherwise
+    stretch the bbox far past it.
+    """
+    from scipy import ndimage
+
+    mask = mask.astype(bool)
+    labeled, n = ndimage.label(mask)
+    if n <= 1:
+        return mask
+    sizes = np.asarray(ndimage.sum(mask, labeled, range(1, n + 1)))
+    keep = np.flatnonzero(sizes >= sizes.max() * rel) + 1
+    return np.isin(labeled, keep)

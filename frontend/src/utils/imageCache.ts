@@ -1,4 +1,4 @@
-const MAX_CACHED_IMAGES = 24;
+const MAX_CACHED_IMAGES = 48;
 
 type ImageCacheEntry = {
   image?: HTMLImageElement;

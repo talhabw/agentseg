@@ -13,11 +13,12 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { Check, X, Trash2, Tag, Search } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useReplayVisibility } from '../../agent/useAgentRuntime';
 
 export function AnnotationList() {
   const {
-    annotations,
+    annotations: storedAnnotations,
     labels,
     selectedAnnotationId,
     selectAnnotation,
@@ -29,6 +30,11 @@ export function AnnotationList() {
   const { currentImageIndex, setCurrentImageIndex, currentImage } = useProjectStore();
   const { reviewFilter, setReviewFilter, reviewModeEnabled, propagationLoaded, addToast } = useUIStore();
   const [isFindingInstances, setIsFindingInstances] = useState(false);
+  const { annotationVisible } = useReplayVisibility();
+  const annotations = useMemo(
+    () => storedAnnotations.filter((ann) => annotationVisible(ann, currentImageIndex)),
+    [storedAnnotations, annotationVisible, currentImageIndex],
+  );
 
   const getLabel = (labelId: number) => labels.find((l) => l.id === labelId);
 
@@ -47,17 +53,17 @@ export function AnnotationList() {
     }
   };
 
-  const getSourceIcon = (source: string) => {
+  const getSourceTag = (source: string, trackId?: number | null) => {
     switch (source) {
-      case 'manual':
-        return '✏️';
       case 'propagated':
       case 'tracked':
-        return '🔄';
+        return 'tracked';
+      case 'sam':
+        return trackId != null ? 'keyframe' : 'SAM';
       case 'yolo':
       case 'yolo_sam':
       case 'yolo_seg':
-        return '🎯';
+        return 'YOLO';
       default:
         return '';
     }
@@ -317,10 +323,10 @@ export function AnnotationList() {
                       </span>
                     )}
 
-                    {/* Source icon */}
-                    {ann.source !== 'manual' && (
-                      <span className="text-xs opacity-70" title={`Source: ${ann.source}`}>
-                        {getSourceIcon(ann.source)}
+                    {/* Source */}
+                    {getSourceTag(ann.source, ann.track_id) && (
+                      <span className="text-[11px] text-muted-foreground" title={`Source: ${ann.source}`}>
+                        {getSourceTag(ann.source, ann.track_id)}
                       </span>
                     )}
 

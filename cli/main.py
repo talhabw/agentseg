@@ -53,7 +53,6 @@ def _default_backend() -> str:
     return DEFAULT_BACKEND
 
 
-BACKEND = _default_backend()
 SAM_URL = os.getenv("SAM_SERVER_URL", "http://localhost:8770")
 
 
@@ -416,7 +415,25 @@ def cmd_up(api: Api, a) -> dict:
                            "try `agentseg down && agentseg up`", **out)
         out["ui"] = ui
         print(f"web UI: {ui}", file=sys.stderr)
+    out["agent_api_key"] = _api_key_source(api)
     return out
+
+
+def _api_key_source(api: Api) -> str:
+    """Whether the backend can give the agent a META_API_KEY; never the value."""
+    from core.envfile import read_env_file
+    try:  # the backend's view counts: an already-running backend keeps its old environment
+        if api.get("/api/agent/config").get("api_key_set"):
+            return "set"
+        return ("missing in the running backend: `read -rs META_API_KEY && export META_API_KEY`, "
+                "then `agentseg down && agentseg up`, or add it to .env")
+    except (CliError, httpx.HTTPError, ValueError, AttributeError):
+        pass
+    if os.environ.get("META_API_KEY", "").strip():
+        return "set (environment)"
+    if read_env_file(REPO / ".env").get("META_API_KEY", "").strip():
+        return "set (.env)"
+    return "missing: `read -rs META_API_KEY && export META_API_KEY` before `agentseg up`, or add it to .env"
 
 
 def cmd_down(api: Api, a) -> dict:
@@ -459,7 +476,12 @@ def cmd_project_open(api: Api, a) -> dict:
 
 def cmd_labels(api: Api, a) -> dict:
     if a.add:
-        api.post("/api/labels", {"name": a.add})
+        existing = {l["name"] for l in api.get("/api/labels")}
+        label = api.post("/api/labels", {"name": a.add})
+        if a.add not in existing:
+            _activity(api, "label.created", action="add_label", status="completed",
+                      label=label.get("name"), label_id=label.get("id"), color=label.get("color"),
+                      message=f"Added label {label.get('name')}")
     return {"labels": api.get("/api/labels")}
 
 
@@ -503,7 +525,7 @@ def cmd_sheet(api: Api, a) -> dict:
     path = api.png("/api/video/render/sheet", params, Path(a.out or _views()) / f"sheet_{tag}.png")
     artifact = _artifact(api, path, kind="contact_sheet", track_id=a.track, frames=frames)
     _activity(api, "artifact.created", action="inspect_sequence", status="completed", track_id=a.track,
-                  artifact=artifact, message=f"Contact sheet ready ({len(frames)} frames)")
+                  artifact=artifact, frames=frames, message=f"Contact sheet ready ({len(frames)} frames)")
     out = {"image": str(path), "frames": frames}
     if artifact:
         out["artifact"] = artifact
@@ -516,7 +538,7 @@ def cmd_sheet(api: Api, a) -> dict:
 def cmd_segment(api: Api, a) -> dict:
     box = _box(a.box)
     _activity(api, "segment.started", action="segment", status="running", frame=a.frame,
-                  bbox=box,
+                  bbox=box, pos=_points(a.pos), neg=_points(a.neg),
                   message=f"Creating a mask proposal on frame {a.frame + 1}")
     body = {"frame": a.frame, "box": box, "pos": _points(a.pos), "neg": _points(a.neg)}
     res = api.post("/api/video/segment", body)
@@ -565,7 +587,8 @@ def cmd_track_create(api: Api, a) -> dict:
                   message=f"Creating track for {a.label}")
     res = api.post("/api/video/tracks", {"preview_id": a.preview, "label": a.label, "name": a.name})
     _activity(api, "track.created", action="create_track", status="completed", track_id=res.get("track_id"),
-                  frame=(res.get("keyframe") or {}).get("frame"), message=f"Track {res.get('track_id')} created")
+                  frame=(res.get("keyframe") or {}).get("frame"), label=a.label, label_id=res.get("label_id"),
+                  preview_id=a.preview, message=f"Track {res.get('track_id')} created")
     return {**res, "next": f"run `agentseg track propagate {res['track_id']}`"}
 
 
@@ -581,12 +604,24 @@ def _propagate(api: Api, tid: int, full=False, start=None, end=None, wait=True) 
     t0, seq, frames = time.time(), 0, 0
     lo, hi = job.get("frame_range") or (0, 0)
     total = hi - lo + 1
+    batch: list[list] = []
+    last_batch = time.time()
+
+    def flush_batch(final=False):
+        nonlocal batch, last_batch
+        if batch and (final or time.time() - last_batch >= 0.25):
+            _activity(api, "track.frames", action="propagate", status="running", track_id=tid,
+                      frames=batch, progress={"done": frames, "total": total},
+                      message=f"Propagating track {tid}")
+            batch, last_batch = [], time.time()
+
     while True:
         res = api.get(f"/api/video/jobs/{job['id']}/events", params={"after": seq, "wait": 15})
         for ev in res["events"]:
             seq = max(seq, ev["seq"])
             if ev["type"] == "frame":
                 frames += 1
+                batch.append([ev.get("frame"), bool(ev.get("visible", True))])
                 if frames == 1 or frames == total or ev.get("render_url"):
                     _activity(api, "track.progress", action="propagate", status="running", track_id=tid,
                               frame=ev.get("frame"), bbox=ev.get("bbox"),
@@ -597,8 +632,10 @@ def _propagate(api: Api, tid: int, full=False, start=None, end=None, wait=True) 
                     print(f"  propagated {frames}/{total} frames ({time.time() - t0:.0f}s)", file=sys.stderr)
             elif ev["type"] == "error":
                 raise CliError(f"propagation failed: {ev.get('message')}")
+        flush_batch()
         if res["status"] in ("finished", "stopped", "error") and not res["events"]:
             break
+    flush_batch(final=True)
     job = api.get(f"/api/video/jobs/{job['id']}")
     if job["status"] != "finished":
         raise CliError(f"propagation ended with status {job['status']}: {job.get('error')}")
@@ -625,7 +662,9 @@ def cmd_track_issues(api: Api, a) -> dict:
 
 def cmd_track_refine(api: Api, a) -> dict:
     _activity(api, "mask.refine_started", action="refine", status="running", track_id=a.track,
-                  frame=a.frame, message=f"Refining track {a.track} on frame {a.frame + 1}")
+                  frame=a.frame, preview_id=a.preview, bbox=_box(a.box) if a.box else None,
+                  pos=_points(a.pos), neg=_points(a.neg),
+                  message=f"Refining track {a.track} on frame {a.frame + 1}")
     body = {"frame": a.frame}
     if a.preview:
         body["preview_id"] = a.preview
@@ -634,6 +673,8 @@ def cmd_track_refine(api: Api, a) -> dict:
     else:
         raise CliError("give --preview P or --box x0,y0,x1,y1", 2)
     res = api.post(f"/api/video/tracks/{a.track}/keyframes", body)
+    _activity(api, "keyframe.added", action="refine", status="completed", track_id=a.track,
+              frame=a.frame, preview_id=a.preview, message=f"Keyframe on frame {a.frame + 1}")
     out = {"keyframe": res}
     if not a.no_propagate:
         out["propagate"] = _propagate(api, a.track)
@@ -644,6 +685,8 @@ def cmd_track_keyframes(api: Api, a) -> dict:
     out = {}
     if a.rm is not None:
         out["removed"] = api.delete(f"/api/video/tracks/{a.track}/keyframes/{a.rm}")
+        _activity(api, "keyframe.removed", action="remove_keyframe", status="completed", track_id=a.track,
+                  frame=a.rm, message=f"Removed keyframe on frame {a.rm + 1}")
         if not a.no_propagate:
             out["propagate"] = _propagate(api, a.track)
     t = _get_track(api, a.track)
@@ -682,12 +725,67 @@ def cmd_export(api: Api, a) -> dict:
     return {"format": a.format, "output_dir": str(out_dir), **res}
 
 
+AGENT_ACTIVE = ("starting", "running")
+
+
+def _print_agent_event(ev: dict) -> None:
+    kind = ev.get("type", "")
+    if kind == "agent.message":
+        print(f"[agent] {ev.get('text') or ev.get('message')}", file=sys.stderr)
+    elif kind in ("agent.tool.started", "agent.failed", "agent.finished", "agent.status") or (
+            kind == "agent.tool.completed" and not ev.get("ok")):
+        print(f"[agent] {kind.split('.', 1)[1]}: {ev.get('message')}", file=sys.stderr)
+
+
+def cmd_agent_run(api: Api, a) -> dict:
+    body = {"instruction": a.instruction, "model": a.model, "effort": a.effort, "timeout_s": a.timeout,
+            "images": str(Path(a.images).expanduser().resolve()) if a.images else None,
+            # keep the agent's CLI state (views, cli_log.jsonl) where this shell's would go
+            "agentseg_home": str(HOME.resolve()) if (os.getenv("AGENTSEG_HOME") or os.getenv("AUTOSEG_HOME")) else None}
+    run = api.post("/api/agent/runs", body)
+    print(f"agent run {run['id']} started (muse pid {run.get('pid')}, model {run.get('model')}); "
+          f"transcript {run.get('transcript')}", file=sys.stderr)
+    if a.no_wait:
+        return {"run": run, "next": f"watch the web UI, or `agentseg agent status {run['id']}`"}
+    cursor, printed = None, set()
+    try:
+        while run["status"] in AGENT_ACTIVE:
+            time.sleep(2)
+            try:  # the activity feed needs an open project; the agent opens one itself
+                res = api.get("/api/activity/events", params={"after": cursor or 0, "limit": 500})
+                for ev in res["events"]:
+                    if ev.get("run_id") == run["id"] and ev["id"] not in printed:
+                        printed.add(ev["id"]); _print_agent_event(ev)
+                cursor = res.get("last_seq", cursor)
+            except CliError:
+                cursor = None
+            run = api.get(f"/api/agent/runs/{run['id']}")
+    except KeyboardInterrupt:
+        api.post(f"/api/agent/runs/{run['id']}/stop")
+        raise
+    if run["status"] == "error":
+        raise CliError(f"agent run failed: {run.get('error')}", run=run)
+    return {"run": run}
+
+
+def cmd_agent_status(api: Api, a) -> dict:
+    if a.run:
+        return {"run": api.get(f"/api/agent/runs/{a.run}")}
+    cfg = api.get("/api/agent/config")
+    return {"config": cfg, "runs": api.get("/api/agent/runs")["runs"]}
+
+
+def cmd_agent_stop(api: Api, a) -> dict:
+    return {"run": api.post(f"/api/agent/runs/{a.run}/stop")}
+
+
 # ---------------------------------------------------------------- argparse
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="agentseg", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--backend", default=BACKEND, help=f"backend URL (default {BACKEND}, env AGENTSEG_BACKEND)")
+    p.add_argument("--backend", default=None,
+                   help=f"backend URL (default: env AGENTSEG_BACKEND, else {DEFAULT_BACKEND} or :8000 if that one is up)")
     sub = p.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
 
     s = sub.add_parser("status", help="backend, sam_server and project state")
@@ -784,6 +882,23 @@ def build_parser() -> argparse.ArgumentParser:
     t = ts.add_parser("list", help="tracks with keyframes, absent ranges, coverage, issue count")
     t.set_defaults(fn=cmd_track_list)
 
+    s = sub.add_parser("agent", help="run the labeling agent (Muse Code, headless) through the backend")
+    ags = s.add_subparsers(dest="sub", required=True, metavar="SUB")
+    g = ags.add_parser("run", help="start a labeling run; streams what the agent does until it ends")
+    g.add_argument("instruction", help='what to label, e.g. "label the torpedo"')
+    g.add_argument("--images", help="image folder or project dir to label")
+    g.add_argument("--model", help="Muse model id (default muse-spark-1.3-contributor, env AGENTSEG_AGENT_MODEL)")
+    g.add_argument("--effort", choices=["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"])
+    g.add_argument("--timeout", type=float, help="stop the run after this many seconds (default 2700)")
+    g.add_argument("--no-wait", action="store_true", help="return right after the run starts")
+    g.set_defaults(fn=cmd_agent_run)
+    g = ags.add_parser("status", help="agent settings and runs, or one run")
+    g.add_argument("run", nargs="?", help="run id or `latest`")
+    g.set_defaults(fn=cmd_agent_status)
+    g = ags.add_parser("stop", help="stop a run")
+    g.add_argument("run", nargs="?", default="latest", help="run id (default: latest)")
+    g.set_defaults(fn=cmd_agent_stop)
+
     s = sub.add_parser("export", help="export labels")
     s.add_argument("--format", choices=["yolo-seg", "yolo-detect", "coco"], default="yolo-seg")
     s.add_argument("--out", help="output folder (default .agentseg/export/<project>_<format>)")
@@ -814,7 +929,7 @@ def main(argv=None) -> int:
     code = 0
     run_id = uuid.uuid4().hex[:12]
     command = "agentseg " + " ".join(argv)
-    api = Api(a.backend)
+    api = Api(a.backend or _default_backend())
     # Keep compatibility with lightweight Api doubles used by integrations and
     # tests while real Api instances retain correlation metadata.
     if hasattr(api, "run_id"):

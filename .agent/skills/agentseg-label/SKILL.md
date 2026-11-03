@@ -53,6 +53,15 @@ For example, for “label the torpedo” resolve `torpedo`; for “label the boa
 in this folder” resolve `board` (or `torpedo_board` when that is the clear
 object identity). Keep it stable for the entire sequence.
 
+Register it in the project's label list before the first mask (this is the
+same list a person picks from in the web UI; reuse an existing label when one
+already names the object):
+
+```
+agentseg labels                     # existing labels
+agentseg labels --add <resolved_label>
+```
+
 ## 3. First mask
 
 ```
@@ -64,8 +73,9 @@ agentseg segment <f> --box x0,y0,x1,y1            # preview only, nothing saved
 - Open the preview image. The yellow fill is the proposed mask, with an outline.
 - **Scope matters.** Include exactly the object the user means. If they say "the
   board" and the mask also covers the stand or legs, re-run `segment` with
-  `--neg x,y` on the unwanted part. Add `--pos x,y` on a missed part. Both flags
-  can be repeated.
+  the same `--box` plus `--neg x,y` on the unwanted part. Add `--pos x,y` on a
+  missed part. Both flags can be repeated. Keep the box as it was and fix the
+  mask with clicks; change the box only if it missed part of the object.
 - Iterate until the preview is right, at most 3 tries. Then:
 
 ```

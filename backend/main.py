@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from contextlib import asynccontextmanager
 
 from backend.config import CORS_ORIGINS, API_HOST, API_PORT
-from backend.api import projects, images, annotations, labels, ml, export, files, tracks, track_jobs, video_tracks, activity
+from backend.api import projects, images, annotations, labels, ml, export, files, tracks, track_jobs, video_tracks, activity, agent
 
 # Configure logging
 logging.basicConfig(
@@ -73,6 +73,7 @@ app.include_router(tracks.router, prefix="/api/tracks", tags=["Tracks"])
 app.include_router(track_jobs.router, prefix="/api/track", tags=["Tracking jobs"])
 app.include_router(video_tracks.router, prefix="/api/video", tags=["Video tracks"])
 app.include_router(activity.router, prefix="/api/activity", tags=["Activity"])
+app.include_router(agent.router, prefix="/api/agent", tags=["Agent"])
 app.include_router(labels.router, prefix="/api/labels", tags=["Labels"])
 app.include_router(ml.router, prefix="/api/ml", tags=["ML"])
 app.include_router(export.router, prefix="/api/export", tags=["Export"])

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Project, ImageRecord } from '../types';
 import * as api from '../api/client';
 import { useUIStore } from './uiStore';
+import { useAgentStore } from '../agent/agentStore';
 import { useAnnotationStore } from './annotationStore';
 
 interface ProjectState {
@@ -41,8 +42,8 @@ export const useProjectStore = create<ProjectState>((set, get) => {
   const activateProject = async (project: Project | null, version: number) => {
     if (version !== projectVersion) return;
     useAnnotationStore.getState().resetForProject();
-    useUIStore.getState().setAgentOverlay(null);
-    useUIStore.getState().setAgentActive(false);
+    // The agent view belongs to the old project's frames; the new one catches up on its own.
+    useAgentStore.setState({ beat: null, sheet: null, focusFrame: null, tracks: {} });
     set({ project, images: [], currentImageIndex: 0, error: null, isLoading: Boolean(project) });
     if (!project) {
       useUIStore.getState().setLastProjectPath(null);

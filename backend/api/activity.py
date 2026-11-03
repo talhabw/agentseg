@@ -153,6 +153,30 @@ def _rows(store, project_id: int, after: int, limit: int, *, latest: bool = Fals
     return list(reversed(out)) if latest else out
 
 
+def events_between(t0: float, t1: float, *, skip_types: tuple[str, ...] = ()) -> list[dict]:
+    """Every event of the open project published between two timestamps (a recorded run)."""
+    project, store = _project_context()
+    with _LOCK:
+        rows = store.conn.execute(
+            """SELECT id, project_id, run_id, source, type, action, status, message,
+                      payload_json, created_at
+               FROM activity_events WHERE project_id = ? AND created_at >= ? AND created_at <= ?
+               ORDER BY id ASC""", (project.id, t0, t1)
+        ).fetchall()
+    out = []
+    for row in rows:
+        if row[4] in skip_types:
+            continue
+        try:
+            payload = json.loads(row[8] or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+        out.append({"id": row[0], "seq": row[0], "project_id": row[1], "run_id": row[2],
+                    "source": row[3], "type": row[4], "action": row[5], "status": row[6],
+                    "message": row[7], "ts": row[9], **payload})
+    return out
+
+
 class ActivityEventRequest(BaseModel):
     type: str = Field(min_length=1, max_length=120)
     source: str = Field(default="cli", max_length=40)

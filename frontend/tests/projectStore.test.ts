@@ -1,8 +1,8 @@
+import { useAgentStore } from '../src/agent/agentStore';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../src/api/client';
 import { useProjectStore } from '../src/stores/projectStore';
 import { useAnnotationStore } from '../src/stores/annotationStore';
-import { useUIStore } from '../src/stores/uiStore';
 import type { Annotation, ImageRecord, Project } from '../src/types';
 
 vi.mock('../src/api/client', () => ({
@@ -23,14 +23,14 @@ describe('backend-authoritative project sync', () => {
   it('adopts a CLI project with the same numeric ID without reopening its DB', async () => {
     useProjectStore.setState({ project: project('/old'), images: [image('/old/0.jpg')] });
     useAnnotationStore.setState({ annotations: [{ id: 1, image_id: 1 }] as Annotation[] });
-    useUIStore.getState().setAgentOverlay({ frame: 0, bbox: [1, 2, 3, 4] });
+    useAgentStore.setState({ beat: { id: 1, frame: 0, bbox: [1, 2, 3, 4], pos: [], neg: [], t0: 0, speed: 1 } });
     vi.mocked(api.getCurrentProject).mockResolvedValue(project('/new'));
     vi.mocked(api.listImages).mockResolvedValue([image('/new/0.jpg')]);
     expect(await useProjectStore.getState().syncCurrentProject()).toBe(true);
     expect(useProjectStore.getState().images[0].path).toBe('/new/0.jpg');
     expect(useProjectStore.getState().project?.root_dir).toBe('/new');
     expect(useAnnotationStore.getState().annotations).toEqual([]);
-    expect(useUIStore.getState().agentOverlay).toBeNull();
+    expect(useAgentStore.getState().beat).toBeNull();
     expect(api.openProject).not.toHaveBeenCalled();
   });
 

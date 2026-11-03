@@ -17,6 +17,11 @@ import { preloadImage } from './utils/imageCache';
 import { runYoloOnCurrentImage, startAutoYolo, stopAutoYolo } from './utils/yoloRunner';
 import { useAgentActivity, type AgentActivityEvent } from './hooks/useAgentActivity';
 import { refreshAgentAnnotations } from './utils/agentAnnotations';
+import { handleLiveAgentEvent, useAgentRuntime } from './agent/useAgentRuntime';
+import { AgentCursor } from './agent/AgentCursor';
+import { agentPropagating } from './agent/agentStore';
+import { SheetOverlay } from './agent/SheetOverlay';
+import { TrackTimeline } from './agent/TrackTimeline';
 import {
   getTrackingJobId,
   isTrackingJobPaused,
@@ -50,51 +55,16 @@ function AppContent() {
   const currentImageId = currentImage?.id;
   const projectRootDir = project?.root_dir;
 
-  // The activity stream is the visual bridge between CLI/SAM work and the
-  // canvas. It deliberately stays outside the sidebar: the image itself is
-  // where progress is easiest to understand.
+  // Activity events drive the agent view (status bar, canvas cursor, feed,
+  // timeline). CLI writes also invalidate cached annotations and labels.
   const handleAgentEvent = useCallback((event: AgentActivityEvent) => {
     const project = useProjectStore.getState().project;
     if (event.project_root_dir && event.project_root_dir !== project?.root_dir) return;
     refreshAgentAnnotations(event);
-    const ui = useUIStore.getState();
-    const running = event.status === 'running' || event.type.endsWith('.started') || event.type === 'video_job.frame';
-    const finished = event.status === 'error' || event.type.endsWith('.failed') ||
-      event.type.endsWith('.finished') || event.type === 'video_job.finished' || event.type === 'video_job.error';
-    if (running) ui.setAgentActive(true);
-    if (finished) ui.setAgentActive(false);
+    handleLiveAgentEvent(event);
+  }, []);
 
-    const frame = typeof event.frame === 'number' ? event.frame : event.image_index;
-    const imageId = typeof event.image_id === 'number' ? event.image_id : undefined;
-    const bbox = Array.isArray(event.bbox) && event.bbox.length === 4
-      ? event.bbox as [number, number, number, number]
-      : undefined;
-    const renderUrl = typeof event.render_url === 'string' ? event.render_url : undefined;
-    const maskUrl = renderUrl ? `${renderUrl}${renderUrl.includes('?') ? '&' : '?'}agent=${event.seq ?? Date.now()}` : undefined;
-
-    if (frame == null && imageId == null && !bbox && !renderUrl) return;
-    const phase = event.type === 'segment.started' ? 'drawing'
-      : event.type === 'mask.proposed' ? 'segmenting'
-      : event.type === 'video_job.frame' || event.type === 'track.progress' ? 'propagating'
-      : undefined;
-    ui.setAgentOverlay({
-      frame,
-      imageId,
-      bbox: bbox ?? null,
-      maskUrl: maskUrl ?? (phase === 'drawing' ? null : undefined),
-      phase: phase ?? 'idle',
-    });
-
-    if (ui.followAgent && (frame != null || imageId != null)) {
-      const target = imageId != null
-        ? images.findIndex((image) => image.id === imageId)
-        : frame;
-      if (target != null && target >= 0 && target < images.length && target !== useProjectStore.getState().currentImageIndex) {
-        useProjectStore.getState().setCurrentImageIndex(target);
-      }
-    }
-  }, [images]);
-
+  useAgentRuntime();
   useAgentActivity(project?.id, handleAgentEvent, project?.root_dir);
 
   // The CLI can switch the backend's active DB while this tab stays open.
@@ -137,10 +107,13 @@ function AppContent() {
       return;
     }
 
-    clearAnnotations();
+    // While the agent's track fills in, the canvas steps through frames fast:
+    // keep the last masks up until the next ones are there, instead of blinking.
+    const riding = agentPropagating();
+    if (!riding) clearAnnotations();
 
     const abortController = new AbortController();
-    const loadDelay = isTrackingJobRunning() ? 0 : NAVIGATION_LOAD_DEBOUNCE_MS;
+    const loadDelay = isTrackingJobRunning() || riding ? 0 : NAVIGATION_LOAD_DEBOUNCE_MS;
 
     const timeoutId = window.setTimeout(() => {
       loadAnnotations(currentImage.id, abortController.signal)
@@ -511,13 +484,17 @@ function AppContent() {
     <div className="h-screen flex flex-col">
       <Header />
       <div className="flex-1 min-h-0 flex overflow-hidden relative">
-        <ImageCanvas />
+        <div className="flex-1 min-w-0 flex flex-col">
+          <div className="relative flex-1 min-h-0 flex">
+            <ImageCanvas />
+            <SheetOverlay />
+          </div>
+          <TrackTimeline />
+        </div>
         <Sidebar />
       </div>
 
-
-
-
+      <AgentCursor />
 
       {/* Modals */}
       <CreateProjectModal />
