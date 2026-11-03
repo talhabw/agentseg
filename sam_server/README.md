@@ -1,7 +1,7 @@
 # sam_server
 
 SAM 3 / 3.1 inference node: keeps the models on the GPU and exposes the upstream
-`sam3` API over HTTP, unchanged (issue #6). No AutoSeg logic lives here.
+`sam3` API over HTTP, unchanged (issue #6). No AgentSeg logic lives here.
 
 ## Run
 

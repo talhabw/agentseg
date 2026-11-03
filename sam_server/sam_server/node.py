@@ -1,4 +1,4 @@
-"""Model holder + dispatch. No AutoSeg logic: everything is passed to upstream sam3.
+"""Model holder + dispatch. No AgentSeg logic: everything is passed to upstream sam3.
 
 All model work runs on ONE worker thread (``self.executor``), so requests are
 serialized. Models are also built on that thread, because upstream predictors

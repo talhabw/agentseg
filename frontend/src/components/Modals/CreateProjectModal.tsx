@@ -68,12 +68,12 @@ export function CreateProjectModal() {
       // If path ends with /images, use sibling folder
       if (cleanPath.endsWith('/images')) {
         const basePath = cleanPath.slice(0, -7); // Remove '/images'
-        setProjectDir(`${basePath}/autoseg_project`);
+        setProjectDir(`${basePath}/agentseg_project`);
       } else {
-        // Otherwise, create autoseg_project as sibling
+        // Otherwise, create a <folder>_agentseg sibling
         const parentPath = cleanPath.split('/').slice(0, -1).join('/');
         const folderName = cleanPath.split('/').pop() || 'project';
-        setProjectDir(`${parentPath}/${folderName}_autoseg`);
+        setProjectDir(`${parentPath}/${folderName}_agentseg`);
       }
     }
   }, [imageDir, projectDirManuallyEdited, name]);

@@ -297,7 +297,7 @@ def _do_export(
     if not labels_only:
         data_yaml_path = out_path / "data.yaml"
         with open(data_yaml_path, "w") as f:
-            f.write(f"# AutoSeg export - {project.name}\n")
+            f.write(f"# AgentSeg export - {project.name}\n")
             f.write(f"path: {out_path.absolute()}\n")
             f.write(f"train: images/train\n")
             f.write(f"val: images/val\n")

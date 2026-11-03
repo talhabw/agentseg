@@ -26,7 +26,7 @@ Modes:
   --tune            grid-search HealthConfig on cached pass-1 masks (no GPU)
   --dino-cost       DINO descriptor cost + bad/good separability on cached pass-1 masks
 
-Runs in the autoseg venv against a running sam_server (sam3 + image):
+Runs in the agentseg venv against a running sam_server (sam3 + image):
   .venv/bin/python scripts/oracle_agent.py --out docs/plans/results/2026-10-30/oracle
 """
 

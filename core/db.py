@@ -1,5 +1,5 @@
 """
-Database initialization and migrations for AutoSeg.
+Database initialization and migrations for AgentSeg.
 """
 
 import sqlite3

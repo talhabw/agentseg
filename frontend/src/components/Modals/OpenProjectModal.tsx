@@ -34,15 +34,10 @@ export function OpenProjectModal() {
   const getProjectDir = (path: string): string => {
     const cleanPath = path.replace(/\/+$/, '');
 
-    // If it ends with /images, look for sibling autoseg_project
+    // If it ends with /images, look for a sibling agentseg_project
     if (cleanPath.endsWith('/images')) {
       const basePath = cleanPath.slice(0, -7);
-      return `${basePath}/autoseg_project`;
-    }
-
-    // If it ends with _autoseg, use as is
-    if (cleanPath.endsWith('_autoseg') || cleanPath.endsWith('autoseg_project')) {
-      return cleanPath;
+      return `${basePath}/agentseg_project`;
     }
 
     return cleanPath;
@@ -91,7 +86,7 @@ export function OpenProjectModal() {
             Open Project
           </DialogTitle>
           <DialogDescription>
-            Enter the path to an existing AutoSeg project folder.
+            Enter the path to an existing AgentSeg project folder.
           </DialogDescription>
         </DialogHeader>
 
@@ -104,7 +99,7 @@ export function OpenProjectModal() {
               placeholder="/path/to/project or /path/to/images"
             />
             <p className="text-xs text-muted-foreground">
-              The folder containing autoseg.db (or your images folder if project is alongside)
+              The folder containing agentseg.db (or your images folder if project is alongside)
             </p>
           </div>
 

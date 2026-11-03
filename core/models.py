@@ -1,5 +1,5 @@
 """
-Core data models for AutoSeg.
+Core data models for AgentSeg.
 
 Dataclasses representing the main entities in the annotation system.
 """

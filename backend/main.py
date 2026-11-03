@@ -13,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi import HTTPException
+from fastapi.responses import FileResponse, JSONResponse
 from contextlib import asynccontextmanager
 
 from backend.config import CORS_ORIGINS, API_HOST, API_PORT
@@ -30,17 +31,17 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Application lifespan events."""
     # Startup
-    logger.info("AutoSeg API starting...")
+    logger.info("AgentSeg API starting...")
     if os.getenv("VIDEO_CLOSE_STALE_SESSIONS") == "1":
         from backend.api.video_tracks import close_stale_sessions
         close_stale_sessions()
     yield
     # Shutdown
-    logger.info("AutoSeg API shutting down...")
+    logger.info("AgentSeg API shutting down...")
 
 
 app = FastAPI(
-    title="AutoSeg API",
+    title="AgentSeg API",
     description="Image annotation API with SAM segmentation and tracking",
     version="1.0.0",
     lifespan=lifespan,
@@ -81,7 +82,30 @@ app.include_router(files.router, prefix="/api/files", tags=["Files"])
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "service": "autoseg-api"}
+    return {"status": "healthy", "service": "agentseg-api", "ui": (FRONTEND_DIST / "index.html").is_file()}
+
+
+# Built web UI (`bun run build` in frontend/). Checked per request so a build
+# made after the backend started is picked up without a restart.
+FRONTEND_DIST = Path(
+    os.getenv("AGENTSEG_FRONTEND_DIST", str(Path(__file__).resolve().parent.parent / "frontend" / "dist"))
+).resolve()
+
+
+@app.get("/{path:path}", include_in_schema=False)
+async def web_ui(path: str):
+    """Serve the single-page web UI; unknown paths fall back to index.html."""
+    if path == "api" or path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="Not Found")
+    index = FRONTEND_DIST / "index.html"
+    if not index.is_file():
+        raise HTTPException(status_code=404, detail="Web UI is not built; run `agentseg up` or `bun run build` in frontend/")
+    target = (FRONTEND_DIST / path).resolve()
+    if path and target.is_file() and target.is_relative_to(FRONTEND_DIST):
+        # Vite puts a content hash in asset names, so they can be cached for good.
+        cache = "public, max-age=31536000, immutable" if path.startswith("assets/") else "no-cache"
+        return FileResponse(target, headers={"Cache-Control": cache})
+    return FileResponse(index, headers={"Cache-Control": "no-cache"})
 
 
 if __name__ == "__main__":

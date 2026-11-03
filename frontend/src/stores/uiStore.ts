@@ -21,7 +21,18 @@ export interface AgentOverlay {
 }
 
 // Keys for localStorage
-const STORAGE_KEY = 'autoseg-ui-settings';
+const STORAGE_KEY = 'agentseg-ui-settings';
+const LEGACY_STORAGE_KEY = 'autoseg-ui-settings';
+
+// Carry settings over from before the autoseg -> agentseg rename.
+try {
+  if (typeof localStorage !== 'undefined' && localStorage.getItem(STORAGE_KEY) === null) {
+    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (legacy !== null) localStorage.setItem(STORAGE_KEY, legacy);
+  }
+} catch {
+  // Storage can be unavailable (private mode, tests); defaults are fine.
+}
 
 interface PerformanceProgress {
   current: number;

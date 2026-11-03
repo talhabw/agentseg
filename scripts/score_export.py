@@ -1,4 +1,4 @@
-"""Score an `autoseg export` (YOLO-seg or YOLO-detect labels) against YOLO box GT.
+"""Score an `agentseg export` (YOLO-seg or YOLO-detect labels) against YOLO box GT.
 
 Same definitions as scripts/oracle_agent.py: box IoU between the predicted
 mask's bounding box and the GT box, averaged over frames with GT; a frame with

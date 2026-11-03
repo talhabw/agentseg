@@ -48,5 +48,6 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# autoseg CLI state (projects, views, logs)
+# agentseg CLI state (projects, views, logs)
 .autoseg/
+.agentseg/

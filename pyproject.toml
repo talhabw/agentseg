@@ -1,5 +1,5 @@
 [project]
-name = "autoseg"
+name = "agentseg"
 version = "0.1.0"
 description = "Annotation tool with SAM segmentation and propagation"
 readme = "README.md"
@@ -50,7 +50,7 @@ dev = [
 ]
 
 [project.scripts]
-autoseg = "cli.main:main"
+agentseg = "cli.main:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -61,7 +61,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 
 [tool.hatch.build.targets.wheel]
-packages = ["app", "core", "ml", "cli"]
+packages = ["backend", "core", "ml", "cli"]
 
 [tool.uv.sources]
 sam3 = { path = "third_party/sam3", editable = true }

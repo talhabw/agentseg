@@ -264,7 +264,7 @@ def _do_yolo_detect_export(
     if not labels_only:
         data_yaml_path = out_path / "data.yaml"
         with open(data_yaml_path, "w") as f:
-            f.write(f"# AutoSeg bbox export - {project.name}\n")
+            f.write(f"# AgentSeg bbox export - {project.name}\n")
             f.write(f"path: {out_path.absolute()}\n")
             f.write(f"train: images/train\n")
             f.write(f"val: images/val\n")
@@ -418,7 +418,7 @@ def _do_coco_export(
     coco_data = {
         subset: {
             "info": {
-                "description": f"AutoSeg export - {project.name}",
+                "description": f"AgentSeg export - {project.name}",
                 "version": "1.0",
                 "year": datetime.now().year,
                 "date_created": datetime.now().isoformat(),

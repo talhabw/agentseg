@@ -24,6 +24,21 @@ from core.models import (
 )
 
 
+# Project database file name. Projects created before the agentseg rename use
+# the legacy name and are still opened.
+DB_FILENAME = "agentseg.db"
+LEGACY_DB_FILENAMES = ("autoseg.db",)
+
+
+def find_project_db(project_dir: str) -> Optional[str]:
+    """Return the project database inside ``project_dir``, or None."""
+    for name in (DB_FILENAME, *LEGACY_DB_FILENAMES):
+        path = os.path.join(project_dir, name)
+        if os.path.exists(path):
+            return path
+    return None
+
+
 # Supported image extensions
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
 
@@ -111,7 +126,7 @@ class ProjectStore:
         os.makedirs(project_dir, exist_ok=True)
 
         # Database path
-        db_path = os.path.join(project_dir, "autoseg.db")
+        db_path = os.path.join(project_dir, DB_FILENAME)
 
         # Initialize database
         init_db(db_path)
@@ -152,10 +167,10 @@ class ProjectStore:
             Loaded Project instance
         """
         project_dir = os.path.abspath(project_dir)
-        db_path = os.path.join(project_dir, "autoseg.db")
+        db_path = find_project_db(project_dir)
 
-        if not os.path.exists(db_path):
-            raise FileNotFoundError(f"No project database found at {db_path}")
+        if db_path is None:
+            raise FileNotFoundError(f"No project database found in {project_dir}")
 
         # Run any pending migrations
         migrate_db(db_path)
@@ -167,6 +182,18 @@ class ProjectStore:
             row = cursor.fetchone()
             if not row:
                 raise ValueError("No project found in database")
+
+            # The project folder may have been moved or renamed since it was
+            # created; keep the stored paths pointing at where it is now.
+            if row["root_dir"] != project_dir or row["db_path"] != db_path:
+                store.conn.execute(
+                    "UPDATE projects SET root_dir = ?, db_path = ? WHERE id = ?",
+                    (project_dir, db_path, row["id"]),
+                )
+                store.commit()
+                row = store.conn.execute(
+                    "SELECT * FROM projects WHERE id = ?", (row["id"],)
+                ).fetchone()
 
             return store._row_to_project(row)
         finally:

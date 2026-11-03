@@ -30,7 +30,7 @@ function notify(title: string, body: string) {
   if (typeof window === 'undefined' || !('Notification' in window)) return;
   if (Notification.permission !== 'granted') return;
   try {
-    new Notification(title, { body, tag: 'autoseg-tracking', requireInteraction: true });
+    new Notification(title, { body, tag: 'agentseg-tracking', requireInteraction: true });
   } catch {
     // best-effort
   }

@@ -225,7 +225,7 @@ def close_stale_sessions() -> None:
     """Close sam3 sessions left behind by a previous backend process.
 
     Only enabled when this backend is the sole client of the sam_server
-    (``autoseg up`` sets VIDEO_CLOSE_STALE_SESSIONS=1); a killed backend
+    (``agentseg up`` sets VIDEO_CLOSE_STALE_SESSIONS=1); a killed backend
     otherwise leaks several GB of VRAM until the server-side expiry.
     """
     try:
@@ -269,7 +269,7 @@ def _engine() -> TrackEngine:
         if eng is not None:
             eng.close()
         images = store.list_images(project.id)
-        frames = FrameSet([i.path for i in images], root=str(Path(project.root_dir) / ".autoseg" / "frames"))
+        frames = FrameSet([i.path for i in images], root=str(Path(project.root_dir) / ".agentseg" / "frames"))
         eng = TrackEngine(_client(), frames)
         _ENGINES[key] = eng
         return eng

@@ -11,7 +11,7 @@ IMAGE_DIR=$2
 GT_DIR=$3
 INSTRUCTION=$4
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-TRIAL_ROOT=/tmp/autoseg_trial
+TRIAL_ROOT=/tmp/agentseg_trial
 RUN_DIR="$TRIAL_ROOT/$SEQ"
 BLIND_DIR="$RUN_DIR/images"
 STATE_DIR="$RUN_DIR/state"
@@ -22,11 +22,11 @@ rm -rf "$RUN_DIR"
 mkdir -p "$BLIND_DIR" "$STATE_DIR"
 cp "$IMAGE_DIR"/* "$BLIND_DIR"/
 
-export AUTOSEG_HOME="$STATE_DIR"
+export AGENTSEG_HOME="$STATE_DIR"
 cd "$ROOT"
 
-if ! .venv/bin/autoseg status >/tmp/autoseg_trial_${SEQ}_status.json 2>/tmp/autoseg_trial_${SEQ}_status.err; then
-  .venv/bin/autoseg up >/tmp/autoseg_trial_${SEQ}_up.json 2>/tmp/autoseg_trial_${SEQ}_up.err
+if ! .venv/bin/agentseg status >/tmp/agentseg_trial_${SEQ}_status.json 2>/tmp/agentseg_trial_${SEQ}_status.err; then
+  .venv/bin/agentseg up >/tmp/agentseg_trial_${SEQ}_up.json 2>/tmp/agentseg_trial_${SEQ}_up.err
 fi
 
 START_NS=$(date +%s%N)
@@ -52,7 +52,7 @@ key = lambda p: [int(t) if t.isdigit() else t for t in re.split(r'(\d+)', p.name
 for i, p in enumerate(sorted(src.glob('*.txt'), key=key), 1):
     shutil.copy2(p, dst / f'{i:06d}.txt')
 PY
-.venv/bin/python "$ROOT/scripts/score_export.py" "$EXPORT_DIR" "$MAPPED_GT" --json "$SCORE_JSON" >/tmp/autoseg_trial_${SEQ}_score.json || true
+.venv/bin/python "$ROOT/scripts/score_export.py" "$EXPORT_DIR" "$MAPPED_GT" --json "$SCORE_JSON" >/tmp/agentseg_trial_${SEQ}_score.json || true
 
 .venv/bin/python - "$SEQ" "$RUN_DIR" "$STATE_DIR" "$TRANSCRIPT" "$RESULT" "$CLAUDE_EXIT" "$START_NS" "$END_NS" "$EXPORT_DIR" "$SCORE_JSON" <<'PY'
 import json, sys, re

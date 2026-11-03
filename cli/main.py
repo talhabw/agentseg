@@ -1,9 +1,12 @@
-"""`autoseg` CLI: a thin client over the backend's video tracking API.
+"""`agentseg` CLI: a thin client over the backend's video tracking API.
+
+`agentseg up` starts everything that is down (sam_server, the backend and the
+web UI it serves) and prints the UI URL; `agentseg down` stops it again.
 
 Every command prints exactly one JSON object on stdout. Images are written as
-PNG files (default `.autoseg/views/`) and their paths are returned in the JSON.
+PNG files (default `.agentseg/views/`) and their paths are returned in the JSON.
 Errors exit non-zero and print `{"ok": false, "error": "..."}`. Long jobs print
-progress on stderr. Every invocation is appended to `.autoseg/cli_log.jsonl`.
+progress on stderr. Every invocation is appended to `.agentseg/cli_log.jsonl`.
 
 Coordinates are always pixels, boxes are `x0,y0,x1,y1`, frames are 0-based
 order indices of the project's images.
@@ -14,6 +17,8 @@ import argparse
 import json
 import math
 import os
+import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -23,7 +28,9 @@ from pathlib import Path
 import httpx
 
 REPO = Path(__file__).resolve().parents[1]
-HOME = Path(os.getenv("AUTOSEG_HOME", ".autoseg"))
+HOME = Path(os.getenv("AGENTSEG_HOME") or os.getenv("AUTOSEG_HOME") or REPO / ".agentseg")
+DEFAULT_BACKEND = "http://localhost:5172"   # the port the frontend dev server proxies to
+DB_FILENAMES = ("agentseg.db", "autoseg.db")  # autoseg.db: projects made before the rename
 
 
 def _default_backend() -> str:
@@ -34,16 +41,16 @@ def _default_backend() -> str:
     commands operate on the same in-memory current project; retain 8000 as a
     fallback for standalone use.
     """
-    configured = os.getenv("AUTOSEG_BACKEND")
+    configured = os.getenv("AGENTSEG_BACKEND") or os.getenv("AUTOSEG_BACKEND")
     if configured:
         return configured
-    for candidate in ("http://localhost:5172", "http://localhost:8000"):
+    for candidate in (DEFAULT_BACKEND, "http://localhost:8000"):
         try:
             if httpx.get(f"{candidate}/api/health", timeout=0.5).status_code < 400:
                 return candidate
         except httpx.HTTPError:
             continue
-    return "http://localhost:5172"
+    return DEFAULT_BACKEND
 
 
 BACKEND = _default_backend()
@@ -70,15 +77,15 @@ class Api:
         run_id = getattr(self, "run_id", None)
         command = getattr(self, "command", None)
         if run_id:
-            headers.update({"X-AutoSeg-Run-ID": run_id, "X-AutoSeg-Source": "cli"})
+            headers.update({"X-AgentSeg-Run-ID": run_id, "X-AgentSeg-Source": "cli"})
             if command:
-                headers["X-AutoSeg-Command"] = command[:240]
+                headers["X-AgentSeg-Command"] = command[:240]
         if headers:
             kw["headers"] = headers
         try:
             r = self.http.request(method, path, **kw)
         except httpx.TransportError as exc:
-            raise CliError(f"backend not reachable at {self.base} ({exc.__class__.__name__}); run `autoseg up`")
+            raise CliError(f"backend not reachable at {self.base} ({exc.__class__.__name__}); run `agentseg up`")
         if r.status_code >= 400:
             try:
                 detail = r.json().get("detail", r.text)
@@ -219,54 +226,206 @@ def cmd_status(api: Api, a) -> dict:
         if proj:
             out["tracks"] = [_track_summary(t) for t in api.get("/api/video/tracks")]
     if not out["backend"]["up"] or not out["sam_server"]["health"]:
-        out["hint"] = "run `autoseg up` to start the missing services"
+        out["hint"] = "run `agentseg up` to start the missing services"
     return out
 
 
 def _spawn(cmd: list[str], cwd: Path, log: Path, env: dict | None = None) -> int:
     log.parent.mkdir(parents=True, exist_ok=True)
-    fh = open(log, "ab")
-    p = subprocess.Popen(cmd, cwd=cwd, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                         start_new_session=True, env={**os.environ, **(env or {})})
+    with open(log, "ab") as fh:
+        p = subprocess.Popen(cmd, cwd=cwd, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                             start_new_session=True, env={**os.environ, **(env or {})})
     return p.pid
 
 
-def _wait(check, timeout: float, what: str):
+def _wait(check, timeout: float, what: str, pid: int | None = None, log: Path | None = None):
     end = time.time() + timeout
     while time.time() < end:
         if check():
             return
+        if pid is not None and not _pid_alive(pid):
+            raise CliError(f"{what} exited during startup; see {log}", log=str(log), tail=_tail(log))
         time.sleep(2)
-    raise CliError(f"{what} did not become ready within {timeout:.0f}s")
+    raise CliError(f"{what} did not become ready within {timeout:.0f}s; see {log}", log=str(log), tail=_tail(log))
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:  # a zombie child counts as dead
+        return not Path(f"/proc/{pid}/stat").read_text().split(") ", 1)[1].startswith("Z")
+    except (OSError, IndexError):
+        return True
+
+
+def _tail(log: Path | None, n: int = 15) -> list[str]:
+    try:
+        return log.read_text(errors="replace").splitlines()[-n:] if log else []
+    except OSError:
+        return []
+
+
+def _port(url: str) -> int:
+    return int(url.rstrip("/").rsplit(":", 1)[-1])
+
+
+def _tool(name: str, *fallbacks: str) -> str | None:
+    found = shutil.which(name)
+    if found:
+        return found
+    for f in fallbacks:
+        f = os.path.expanduser(f)
+        if os.access(f, os.X_OK):
+            return f
+    return None
+
+
+def _listeners(port: int) -> list[int]:
+    """PIDs listening on a local TCP port."""
+    try:
+        out = subprocess.run(["lsof", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"], capture_output=True, text=True).stdout
+        return sorted({int(x) for x in out.split()})
+    except (OSError, ValueError):
+        return []
+
+
+def _stop_port(port: int, what: str, timeout: float = 20) -> list[int]:
+    """SIGTERM the process group listening on `port`, SIGKILL if it hangs."""
+    pids = _listeners(port)
+    for pid in pids:
+        try:
+            pgid = os.getpgid(pid)
+            if pgid == os.getpgid(0):  # never signal our own process group
+                raise PermissionError
+            os.killpg(pgid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
+    end = time.time() + timeout
+    while pids and _listeners(port) and time.time() < end:
+        time.sleep(0.5)
+    for pid in _listeners(port):
+        print(f"{what} did not stop, killing pid {pid}", file=sys.stderr)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    return pids
+
+
+UI_INPUTS = ("src", "public", "index.html", "package.json", "bun.lock", "vite.config.ts",
+             "tsconfig.json", "tsconfig.app.json", "tsconfig.node.json")
+
+
+def _ui_stale(frontend: Path) -> str | None:
+    """Why the built UI needs a rebuild, or None if it is up to date."""
+    index = frontend / "dist" / "index.html"
+    if not index.exists():
+        return "not built"
+    built = index.stat().st_mtime
+    for name in UI_INPUTS:
+        root = frontend / name
+        files = [root] if root.is_file() else (root.rglob("*") if root.is_dir() else [])
+        for f in files:
+            if f.is_file() and f.stat().st_mtime > built:
+                return f"{f.relative_to(frontend)} changed"
+    return None
+
+
+def _build_ui(force: bool) -> dict | str:
+    frontend = REPO / "frontend"
+    reason = "--rebuild" if force else _ui_stale(frontend)
+    if reason is None:
+        return "up to date"
+    bun = _tool("bun", "~/.bun/bin/bun")
+    if not bun:
+        raise CliError("bun is needed to build the web UI (https://bun.sh), or pass --no-ui")
+    log = (HOME / "frontend_build.log").resolve()
+    log.parent.mkdir(parents=True, exist_ok=True)
+    steps = ([[bun, "install", "--frozen-lockfile"]] if not (frontend / "node_modules").is_dir() else []) + \
+            [[bun, "run", "build"]]
+    print(f"building web UI ({reason}, log {log}) ...", file=sys.stderr)
+    with open(log, "ab") as fh:
+        for cmd in steps:
+            r = subprocess.run(cmd, cwd=frontend, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+            if r.returncode:
+                raise CliError(f"`{' '.join(cmd[1:])}` failed in frontend/; see {log}", log=str(log), tail=_tail(log))
+    return {"built": reason, "log": str(log)}
+
+
+def _start_sam(a) -> dict | str:
+    if _sam_ready():
+        return "already running"
+    if a.no_sam:
+        return "down (skipped)"
+    if _listeners(_port(SAM_URL)):
+        # Something holds the port but is not healthy yet: most likely a sam_server still loading.
+        print(f"waiting for the process on {SAM_URL} to become ready ...", file=sys.stderr)
+        _wait(lambda: (_sam_ready() or {}).get("ready"), 600, "sam_server", log=HOME / "sam_server.log")
+        return "already running"
+    ckpt = REPO / "models/sam3/sam3.pt"
+    if not ckpt.exists():
+        raise CliError(f"SAM 3 checkpoint missing at {ckpt}; download it or pass --no-sam")
+    if not (REPO / "third_party/sam3/pyproject.toml").exists():
+        raise CliError("third_party/sam3 is empty; run `git submodule update --init third_party/sam3`")
+    uv = _tool("uv", "~/.local/bin/uv", "~/.cargo/bin/uv")
+    if not uv:
+        raise CliError("uv is needed to run sam_server (https://docs.astral.sh/uv/)")
+    log = (HOME / "sam_server.log").resolve()
+    attrs = '{"batched_grounding_batch_size": 4, "postprocess_batch_size": 4}'
+    pid = _spawn([uv, "run", "sam-server", "--port", str(_port(SAM_URL)), "--models", "sam3,image",
+                  "--sam3-checkpoint", str(ckpt), "--video-model-attrs", attrs],
+                 REPO / "sam_server", log, {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
+    print(f"starting sam_server (pid {pid}, log {log}); loading SAM 3 takes 1-2 min ...", file=sys.stderr)
+    _wait(lambda: (_sam_ready() or {}).get("ready"), 600, "sam_server", pid, log)
+    return {"started": pid, "log": str(log)}
+
+
+def _start_backend(api: Api, a) -> dict | str:
+    if _alive(f"{api.base}/api/health"):
+        return "already running"
+    log = (HOME / "backend.log").resolve()
+    pid = _spawn([sys.executable, "-m", "uvicorn", "backend.main:app", "--host", a.host,
+                  "--port", str(_port(api.base))], REPO, log,
+                 {"PYTHONPATH": str(REPO), "SAM_SERVER_URL": SAM_URL, "VIDEO_CLOSE_STALE_SESSIONS": "1"})
+    print(f"starting backend (pid {pid}, log {log}) ...", file=sys.stderr)
+    _wait(lambda: _alive(f"{api.base}/api/health"), 120, "backend", pid, log)
+    return {"started": pid, "log": str(log)}
 
 
 def cmd_up(api: Api, a) -> dict:
-    out = {}
-    if _sam_ready():
-        out["sam_server"] = "already running"
-    elif a.no_sam:
-        out["sam_server"] = "down (skipped)"
+    out = {"sam_server": _start_sam(a)}
+    if not a.no_ui:
+        out["web_ui_build"] = _build_ui(a.rebuild)
+    out["backend"] = _start_backend(api, a)
+    if not a.no_ui:
+        ui = f"{api.base}/"
+        try:
+            r = httpx.get(ui, timeout=5.0)
+            served = r.status_code == 200 and "<div id=\"root\">" in r.text
+        except httpx.HTTPError:
+            served = False
+        if not served:
+            raise CliError(f"backend at {api.base} does not serve the web UI; an old backend may be running, "
+                           "try `agentseg down && agentseg up`", **out)
+        out["ui"] = ui
+        print(f"web UI: {ui}", file=sys.stderr)
+    return out
+
+
+def cmd_down(api: Api, a) -> dict:
+    out = {"backend": {"stopped": _stop_port(_port(api.base), "backend")}}
+    if a.all:
+        # Give the backend's sam3 sessions back before the server goes; harmless if it is already down.
+        out["sam_server"] = {"stopped": _stop_port(_port(SAM_URL), "sam_server", timeout=60)}
     else:
-        log = (HOME / "sam_server.log").resolve()
-        attrs = '{"batched_grounding_batch_size": 4, "postprocess_batch_size": 4}'
-        port = SAM_URL.rsplit(":", 1)[-1].strip("/")
-        pid = _spawn(["uv", "run", "sam-server", "--port", port, "--models", "sam3,image",
-                      "--sam3-checkpoint", str(REPO / "models/sam3/sam3.pt"), "--video-model-attrs", attrs],
-                     REPO / "sam_server", log, {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
-        print(f"starting sam_server (pid {pid}, log {log}) ...", file=sys.stderr)
-        _wait(lambda: (_sam_ready() or {}).get("ready"), 600, "sam_server")
-        out["sam_server"] = {"started": pid, "log": str(log)}
-    if _alive(f"{api.base}/api/health"):
-        out["backend"] = "already running"
-    else:
-        log = (HOME / "backend.log").resolve()
-        port = api.base.rsplit(":", 1)[-1].strip("/")
-        pid = _spawn([sys.executable, "-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1",
-                      "--port", port], REPO, log, {"PYTHONPATH": str(REPO), "SAM_SERVER_URL": SAM_URL,
-                                        "VIDEO_CLOSE_STALE_SESSIONS": "1"})
-        print(f"starting backend (pid {pid}, log {log}) ...", file=sys.stderr)
-        _wait(lambda: _alive(f"{api.base}/api/health"), 120, "backend")
-        out["backend"] = {"started": pid, "log": str(log)}
+        out["sam_server"] = "left running (use --all to stop it too)"
     return out
 
 
@@ -277,16 +436,20 @@ def _project_info(api: Api, proj: dict) -> dict:
             "image_size": [first["width"], first["height"]] if first else None}
 
 
+def _is_project(path: Path) -> bool:
+    return any((path / name).exists() for name in DB_FILENAMES)
+
+
 def cmd_project_open(api: Api, a) -> dict:
     path = Path(a.path).expanduser().resolve()
     if not path.is_dir():
         raise CliError(f"not a directory: {path}", 2)
-    if (path / "autoseg.db").exists():
+    if _is_project(path):
         proj, created = api.post("/api/projects/open", {"project_dir": str(path)}), False
     else:
         name = a.name or path.name if path.name != "images" else (a.name or path.parent.name)
         pdir = Path(a.project_dir).expanduser().resolve() if a.project_dir else (HOME / "projects" / name).resolve()
-        if (pdir / "autoseg.db").exists():
+        if _is_project(pdir):
             proj, created = api.post("/api/projects/open", {"project_dir": str(pdir)}), False
         else:
             proj, created = api.post("/api/projects", {"project_dir": str(pdir), "image_dir": str(path),
@@ -403,7 +566,7 @@ def cmd_track_create(api: Api, a) -> dict:
     res = api.post("/api/video/tracks", {"preview_id": a.preview, "label": a.label, "name": a.name})
     _activity(api, "track.created", action="create_track", status="completed", track_id=res.get("track_id"),
                   frame=(res.get("keyframe") or {}).get("frame"), message=f"Track {res.get('track_id')} created")
-    return {**res, "next": f"run `autoseg track propagate {res['track_id']}`"}
+    return {**res, "next": f"run `agentseg track propagate {res['track_id']}`"}
 
 
 def _propagate(api: Api, tid: int, full=False, start=None, end=None, wait=True) -> dict:
@@ -445,8 +608,8 @@ def _propagate(api: Api, tid: int, full=False, start=None, end=None, wait=True) 
                   issues=issues, message=f"Track {tid} propagation finished")
     return {"track_id": tid, "frame_range": [lo, hi], "frames_written": job["counts"]["frames"],
             "seconds": round(time.time() - t0, 1), "issues": issues,
-            "next": ("no issues: check `autoseg sheet --track %d` then export" % tid) if not issues else
-                    "inspect each issue's worst_frame with `autoseg view <frame> --track %d --grid`" % tid}
+            "next": ("no issues: check `agentseg sheet --track %d` then export" % tid) if not issues else
+                    "inspect each issue's worst_frame with `agentseg view <frame> --track %d --grid`" % tid}
 
 
 def cmd_track_propagate(api: Api, a) -> dict:
@@ -506,7 +669,7 @@ def cmd_track_list(api: Api, a) -> dict:
 def cmd_export(api: Api, a) -> dict:
     proj = api.get("/api/projects/current")
     if not proj:
-        raise CliError("no project open; run `autoseg project open <dir>`")
+        raise CliError("no project open; run `agentseg project open <dir>`")
     out_dir = Path(a.out or HOME / "export" / f"{proj['name']}_{a.format}").expanduser().resolve()
     common = {"output_dir": str(out_dir), "train_split": 1.0, "approved_only": a.approved_only,
               "include_negative": True, "labels_colocate": False, "labels_only": a.labels_only}
@@ -522,24 +685,32 @@ def cmd_export(api: Api, a) -> dict:
 # ---------------------------------------------------------------- argparse
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="autoseg", description=__doc__,
+    p = argparse.ArgumentParser(prog="agentseg", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--backend", default=BACKEND, help=f"backend URL (default {BACKEND}, env AUTOSEG_BACKEND)")
+    p.add_argument("--backend", default=BACKEND, help=f"backend URL (default {BACKEND}, env AGENTSEG_BACKEND)")
     sub = p.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
 
     s = sub.add_parser("status", help="backend, sam_server and project state")
     s.set_defaults(fn=cmd_status)
 
-    s = sub.add_parser("up", help="start sam_server and/or the backend if they are down")
+    s = sub.add_parser("up", help="start whatever is down (sam_server, backend, web UI) and print the UI URL")
     s.add_argument("--no-sam", action="store_true", help="do not start sam_server")
+    s.add_argument("--no-ui", action="store_true", help="do not build or check the web UI")
+    s.add_argument("--rebuild", action="store_true", help="rebuild the web UI even if it looks up to date")
+    s.add_argument("--host", default=os.getenv("AGENTSEG_HOST", "127.0.0.1"),
+                   help="interface the backend binds to (default 127.0.0.1; 0.0.0.0 exposes it on the network)")
     s.set_defaults(fn=cmd_up)
+
+    s = sub.add_parser("down", help="stop the backend (and sam_server with --all)")
+    s.add_argument("--all", action="store_true", help="also stop sam_server (frees the GPU)")
+    s.set_defaults(fn=cmd_down)
 
     s = sub.add_parser("project", help="open or create a project")
     ps = s.add_subparsers(dest="sub", required=True, metavar="SUB")
-    o = ps.add_parser("open", help="open a project dir (has autoseg.db) or create one from an image folder")
+    o = ps.add_parser("open", help="open a project dir (has agentseg.db) or create one from an image folder")
     o.add_argument("path", help="project dir or image folder")
     o.add_argument("--name", help="project name when creating (default: folder name)")
-    o.add_argument("--project-dir", help="where to create the project (default .autoseg/projects/<name>)")
+    o.add_argument("--project-dir", help="where to create the project (default .agentseg/projects/<name>)")
     o.set_defaults(fn=cmd_project_open)
 
     s = sub.add_parser("labels", help="list labels; --add NAME creates one")
@@ -551,7 +722,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--track", type=int, help="only this track's masks")
     s.add_argument("--grid", action="store_true", help="draw a 50 px pixel-coordinate grid")
     s.add_argument("--preview", help="overlay a segment preview")
-    s.add_argument("--out", help="output folder (default .autoseg/views)")
+    s.add_argument("--out", help="output folder (default .agentseg/views)")
     s.set_defaults(fn=cmd_view)
 
     s = sub.add_parser("sheet", help="contact sheet of many frames (status-coloured with --track)")
@@ -615,7 +786,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("export", help="export labels")
     s.add_argument("--format", choices=["yolo-seg", "yolo-detect", "coco"], default="yolo-seg")
-    s.add_argument("--out", help="output folder (default .autoseg/export/<project>_<format>)")
+    s.add_argument("--out", help="output folder (default .agentseg/export/<project>_<format>)")
     s.add_argument("--approved-only", action="store_true", help="skip frames health flagged for review")
     s.add_argument("--labels-only", action="store_true", help="do not copy images")
     s.set_defaults(fn=cmd_export)
@@ -642,7 +813,7 @@ def main(argv=None) -> int:
         raise
     code = 0
     run_id = uuid.uuid4().hex[:12]
-    command = "autoseg " + " ".join(argv)
+    command = "agentseg " + " ".join(argv)
     api = Api(a.backend)
     # Keep compatibility with lightweight Api doubles used by integrations and
     # tests while real Api instances retain correlation metadata.

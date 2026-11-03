@@ -1,4 +1,4 @@
-"""Utilities for turning YOLO detections into AutoSeg annotations."""
+"""Utilities for turning YOLO detections into AgentSeg annotations."""
 
 from __future__ import annotations
 

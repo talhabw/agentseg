@@ -78,7 +78,7 @@ CREATE TABLE annotations (id INTEGER PRIMARY KEY AUTOINCREMENT, image_id INTEGER
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);
 INSERT INTO schema_version (version) VALUES (1);
-INSERT INTO projects (name, root_dir, db_path) VALUES ('old', '/x', '/x/autoseg.db');
+INSERT INTO projects (name, root_dir, db_path) VALUES ('old', '/x', '/x/agentseg.db');
 INSERT INTO labels (project_id, name, color_hex) VALUES (1, 'box', '#fff');
 INSERT INTO images (project_id, path, width, height, order_index) VALUES (1, '/x/a.png', 10, 10, 0);
 INSERT INTO annotations (image_id, label_id, bbox_xyxy_json, status) VALUES (1, 1, '[0,0,5,5]', 'needs_review');
@@ -86,7 +86,7 @@ INSERT INTO annotations (image_id, label_id, bbox_xyxy_json, status) VALUES (1, 
 
 
 def test_migrate_v1_to_v2(tmp_path):
-    db = str(tmp_path / "autoseg.db")
+    db = str(tmp_path / "agentseg.db")
     conn = sqlite3.connect(db)
     conn.executescript(V1_SCHEMA)
     conn.close()

@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
-from core.store import ProjectStore
+from core.store import ProjectStore, find_project_db
 from core.models import Project
 
 router = APIRouter()
@@ -90,8 +90,7 @@ async def open_project(request: OpenProjectRequest):
     if not os.path.exists(request.project_dir):
         raise HTTPException(status_code=404, detail="Project directory not found")
 
-    db_path = os.path.join(request.project_dir, "autoseg.db")
-    if not os.path.exists(db_path):
+    if find_project_db(request.project_dir) is None:
         raise HTTPException(status_code=404, detail="Project database not found")
 
     try:

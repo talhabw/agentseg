@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 # Base paths
-ROOT_DIR = Path(__file__).parent.parent  # autoseg/
+ROOT_DIR = Path(__file__).parent.parent  # agentseg/
 CACHE_DIR = ROOT_DIR / "cache"
 MODELS_DIR = ROOT_DIR / "models"
 

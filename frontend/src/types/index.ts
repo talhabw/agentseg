@@ -1,4 +1,4 @@
-// Types for AutoSeg
+// Types for AgentSeg
 
 export interface Project {
   id: number;

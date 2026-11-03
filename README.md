@@ -1,6 +1,6 @@
-# AutoSeg
+# AgentSeg
 
-An annotation tool for image segmentation with SAM integration and automatic propagation.
+(formerly AutoSeg) An annotation tool for image segmentation with SAM integration and automatic propagation.
 
 ## Features
 
@@ -58,24 +58,35 @@ https://github.com/user-attachments/assets/946ba046-a91b-4d39-ab81-d85eb0bfba0c
 
 ## Usage
 
-**Backend**:
+Start everything with one command:
 ```bash
-uv run uvicorn backend.main:app --host 0.0.0.0 --port 5172
+uv run agentseg up        # or .venv/bin/agentseg up
 ```
+This starts whatever is not running yet and prints the web UI URL
+(http://localhost:5172 by default):
+- **sam_server** on :8770 (SAM 3 video + image heads, needs `models/sam3/sam3.pt`; first load takes 1-2 min),
+- the **web UI**, rebuilt with bun when `frontend/` changed since the last build,
+- the **backend** on :5172, which serves the API and the built web UI.
 
-**Frontend**:
+Logs go to `.agentseg/` (`sam_server.log`, `backend.log`, `frontend_build.log`).
+Useful flags: `--no-sam`, `--no-ui`, `--rebuild`, `--host 0.0.0.0` (expose on the network).
+`agentseg status` shows what is up; `agentseg down` stops the backend and
+`agentseg down --all` also stops sam_server (frees the GPU).
+
+The same `agentseg` CLI drives labeling from the terminal or an agent
+(see `.agent/skills/agentseg-label/SKILL.md`).
+
+**Frontend development** (hot reload, proxies `/api` to the backend on :5172):
 ```bash
 cd frontend
-bun run build
-bun run preview --port 5173
+bun run dev               # http://localhost:5173
 ```
-Access at: http://localhost:5173
 
 ## Testing
 
-Run the test suite (you may need to install optional dependencies from `pyproject.toml`):
 ```bash
-uv run pytest
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run --extra dev python -m pytest
+cd frontend && bun run test
 ```
 
 ## Acknowledgements

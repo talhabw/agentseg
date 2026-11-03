@@ -1,16 +1,16 @@
 ---
-name: autoseg-label
-description: Label or track an object through a video / image sequence in this repo with the `autoseg` CLI (SAM 3 tracking + health checks). Use for requests like "label the torpedo", "label the board in this folder", "track X through these frames", "fix the labels of track N", or exporting those labels.
+name: agentseg-label
+description: Label or track an object through a video / image sequence in this repo with the `agentseg` CLI (SAM 3 tracking + health checks). Use for requests like "label the torpedo", "label the board in this folder", "track X through these frames", "fix the labels of track N", or exporting those labels.
 ---
 
-# Labeling a sequence with `autoseg`
+# Labeling a sequence with `agentseg`
 
 You segment the object once, SAM 3 tracks it through every frame, and the
 backend flags frames that look wrong ("issues"). Your job is to give a good
 first mask, then inspect issues and fix only what is actually wrong. Most
 sequences need 0–3 fixes.
 
-Run the CLI from the repo root as `.venv/bin/autoseg …` (or `uv run autoseg …`).
+Run the CLI from the repo root as `.venv/bin/agentseg …` (or `uv run agentseg …`).
 Every command prints one JSON object; read `ok`, `error` and `next`. Images are
 written as PNG files and returned as `"image": "<path>"`. **Open that path with
 your file-reading tool to see it.** You cannot judge a mask without looking.
@@ -22,8 +22,8 @@ Conventions: pixel coordinates, boxes `x0,y0,x1,y1`, points `x,y`, frames are
 ## 0. Services
 
 ```
-autoseg status            # backend + sam_server + open project
-autoseg up                # starts whatever is down (sam_server takes ~1–2 min)
+agentseg status            # backend + sam_server + open project
+agentseg up                # starts whatever is down (sam_server takes ~1–2 min)
 ```
 
 If `up` fails, read the log path it prints. Do not kill other GPU processes.
@@ -31,8 +31,8 @@ If `up` fails, read the log path it prints. Do not kill other GPU processes.
 ## 1. Open the project and find the object
 
 ```
-autoseg project open <image_folder>     # or an existing project dir (has autoseg.db)
-autoseg sheet                           # ~24 thumbnails across the whole sequence
+agentseg project open <image_folder>     # or an existing project dir (has agentseg.db)
+agentseg sheet                           # ~24 thumbnails across the whole sequence
 ```
 
 `project open` returns `frames` and `image_size`. Look at the sheet. Pick a
@@ -56,8 +56,8 @@ object identity). Keep it stable for the entire sequence.
 ## 3. First mask
 
 ```
-autoseg view <f> --grid                          # 50 px labelled grid for reading coordinates
-autoseg segment <f> --box x0,y0,x1,y1            # preview only, nothing saved
+agentseg view <f> --grid                          # 50 px labelled grid for reading coordinates
+agentseg segment <f> --box x0,y0,x1,y1            # preview only, nothing saved
 ```
 
 - Read the box off the grid with a small margin (5–10 px) around the object.
@@ -69,8 +69,8 @@ autoseg segment <f> --box x0,y0,x1,y1            # preview only, nothing saved
 - Iterate until the preview is right, at most 3 tries. Then:
 
 ```
-autoseg track create --label <resolved_label> --preview <preview_id>
-autoseg track propagate <track_id>               # ~1 min per 500 frames; returns issues
+agentseg track create --label <resolved_label> --preview <preview_id>
+agentseg track propagate <track_id>               # ~1 min per 500 frames; returns issues
 ```
 
 Use the label name the user gave, or a short descriptive one such as `torpedo_board`.
@@ -87,7 +87,7 @@ issue list:
 For each issue, look at its `worst_frame`:
 
 ```
-autoseg view <worst_frame> --track <T> --grid
+agentseg view <worst_frame> --track <T> --grid
 ```
 
 In the view, the track mask is magenta with an outline. A yellow box marks a
@@ -104,9 +104,9 @@ keyframe and a cyan box a propagated frame.
 Rules:
 - **Never refine without looking at the preview first.** A bad keyframe poisons
   the tracker for many frames.
-- If a keyframe you added made things worse: `autoseg track keyframes T --rm <f>`.
+- If a keyframe you added made things worse: `agentseg track keyframes T --rm <f>`.
 - **Batch fixes:** add `--no-propagate` to all but the last `refine` or
-  `absent`, or follow them with one `autoseg track propagate T`. Each
+  `absent`, or follow them with one `agentseg track propagate T`. Each
   propagation costs 30–60 s.
 - For `absent`, check the boundaries. Use `sheet --track T --frames a-b`
   around the range and mark only frames where the object is truly not visible
@@ -119,9 +119,9 @@ Rules:
 ## 5. Final check and export
 
 ```
-autoseg sheet --track T                 # border colours: yellow keyframe, green ok,
+agentseg sheet --track T                 # border colours: yellow keyframe, green ok,
                                         # orange review, grey absent, red no mask
-autoseg export                          # YOLO-seg (default); --format yolo-detect|coco
+agentseg export                          # YOLO-seg (default); --format yolo-detect|coco
 ```
 
 Look at the final sheet. Orange frames are fine if you inspected them and
@@ -143,20 +143,20 @@ Short:
 ## Reference
 
 ```
-autoseg status | up [--no-sam]
-autoseg project open <dir> [--name N] [--project-dir D]
-autoseg labels [--add NAME]
-autoseg view <f> [--track T] [--grid] [--preview P]
-autoseg sheet [--track T] [--every N | --frames a-b,c]
-autoseg segment <f> --box x0,y0,x1,y1 [--pos x,y]... [--neg x,y]... [--no-grid]
-autoseg track create --label L --preview P
-autoseg track propagate T [--full] [--start a --end b] [--no-wait]
-autoseg track issues T [--verbose]
-autoseg track refine T <f> (--preview P | --box ... [--pos ..] [--neg ..]) [--no-propagate]
-autoseg track keyframes T [--rm F] [--no-propagate]
-autoseg track absent T <frames> [--no-propagate]
-autoseg track list
-autoseg export [--format yolo-seg|yolo-detect|coco] [--out DIR] [--approved-only] [--labels-only]
+agentseg status | up [--no-sam] [--no-ui] | down [--all]
+agentseg project open <dir> [--name N] [--project-dir D]
+agentseg labels [--add NAME]
+agentseg view <f> [--track T] [--grid] [--preview P]
+agentseg sheet [--track T] [--every N | --frames a-b,c]
+agentseg segment <f> --box x0,y0,x1,y1 [--pos x,y]... [--neg x,y]... [--no-grid]
+agentseg track create --label L --preview P
+agentseg track propagate T [--full] [--start a --end b] [--no-wait]
+agentseg track issues T [--verbose]
+agentseg track refine T <f> (--preview P | --box ... [--pos ..] [--neg ..]) [--no-propagate]
+agentseg track keyframes T [--rm F] [--no-propagate]
+agentseg track absent T <frames> [--no-propagate]
+agentseg track list
+agentseg export [--format yolo-seg|yolo-detect|coco] [--out DIR] [--approved-only] [--labels-only]
 ```
 
 All commands accept `--help`. Errors print `{"ok": false, "error": "..."}` and

@@ -13,7 +13,7 @@ from ml.sam3_video import Sam3Client, FrameSet, TrackEngine
 from ml.sam3_video.health import HealthConfig, DinoEmbedder, assess
 
 client = Sam3Client("http://localhost:8770")          # model="sam3"
-frames = FrameSet(ordered_image_paths, root=".autoseg/frames")   # builds <i>.jpg symlinks
+frames = FrameSet(ordered_image_paths, root=".agentseg/frames")   # builds <i>.jpg symlinks
 with TrackEngine(client, frames) as eng:
     t = eng.add_track("torpedo")
     mask, score = eng.segment(0, box=[x0, y0, x1, y1], pos=[(x, y)], neg=[(x, y)])

@@ -1,6 +1,6 @@
 """Lossless JSON codec for SAM inputs/outputs (copy of ``sam_server/sam_server/codec.py``).
 
-Kept as a small copy so the autoseg venv does not depend on the sam_server package
+Kept as a small copy so the agentseg venv does not depend on the sam_server package
 (separate venv, different torch build). ``tests/test_sam3_video_engine.py`` checks that
 the two copies stay wire-compatible.
 

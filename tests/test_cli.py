@@ -1,4 +1,4 @@
-"""`autoseg` CLI against the real FastAPI app with the GPU-free fake SAM client."""
+"""`agentseg` CLI against the real FastAPI app with the GPU-free fake SAM client."""
 import json
 import sqlite3
 
@@ -41,7 +41,7 @@ def run(tmp_path, monkeypatch, capsys):
     fake = FakeSam3Client(6, 24, 32, dx=0)
     monkeypatch.setattr(video_api, "_client", lambda: fake)
     monkeypatch.setenv("VIDEO_HEALTH_DINO", "0")
-    monkeypatch.setattr(cli, "HOME", tmp_path / ".autoseg")
+    monkeypatch.setattr(cli, "HOME", tmp_path / ".agentseg")
     video_api._ENGINES.clear(); video_api._JOBS.clear()
     client = TestClient(app)
 
@@ -67,7 +67,7 @@ def run(tmp_path, monkeypatch, capsys):
 def test_label_flow(run, tmp_path):
     code, seg = run("segment", "0", "--box", "2,3,10,12", "--pos", "5,6")
     assert code == 0 and seg["preview_id"] and seg["area"] > 0
-    assert (tmp_path / ".autoseg" / "views").exists() and seg["image"].endswith(".png")
+    assert (tmp_path / ".agentseg" / "views").exists() and seg["image"].endswith(".png")
 
     code, made = run("track", "create", "--label", "board", "--preview", seg["preview_id"])
     assert code == 0
@@ -92,7 +92,7 @@ def test_label_flow(run, tmp_path):
     code, res = run("view", "1", "--track", tid, "--grid")
     assert code == 0
 
-    log = (tmp_path / ".autoseg" / "cli_log.jsonl").read_text().splitlines()
+    log = (tmp_path / ".agentseg" / "cli_log.jsonl").read_text().splitlines()
     assert json.loads(log[0])["argv"][0] == "segment"
 
 
