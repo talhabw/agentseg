@@ -16,7 +16,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:5172',
+        // AGENTSEG_API points a dev server at another backend (e.g. a private one for UI work).
+        target: process.env.AGENTSEG_API ?? 'http://127.0.0.1:5172',
         changeOrigin: true,
       },
     },
