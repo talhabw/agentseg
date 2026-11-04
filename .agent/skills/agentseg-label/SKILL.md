@@ -73,25 +73,26 @@ agentseg view <f> --grid                          # 50 px labelled grid for read
 agentseg segment <f> --box x0,y0,x1,y1            # preview only, nothing saved
 ```
 
-**Boxes: draw them big.** Your boxes tend to come out too small and cut the
-object off; that is the most common mistake in this task. A box that is too
-big costs nothing (SAM still picks the one object in it). A box that is too
-small gives a mask of part of the object.
+**Boxes: snug, around the whole object.** On the grid, find the object's
+leftmost, rightmost, top and bottom pixels (bumper to bumper, wheels, roof),
+then add a small margin (about 5–10% of its size). Not more: a box with lots
+of room lets SAM take in the object's **shadow** or the ground around it, and
+the tracker then copies that to every frame.
 
-- On the grid, find the object's leftmost, rightmost, top and bottom pixels
-  (bumper to bumper, wheels and shadow-side edge, roof). Then add a margin of
-  about **20% of the object's width/height on every side**.
-- `segment` checks this for you: while the mask keeps growing with a larger
-  box, it enlarges the box itself and returns the grown mask. When
-  `check.note` says it grew, the returned `preview_id` already holds the
-  whole object, so use it. The note also tells you to draw bigger next time.
+- Read `check`: `segment` also tries a 20% larger box. A `WARNING` that the mask
+  grows with the larger box means your box cut the object off. If the zoom of
+  that bigger mask shows the whole object, use its `padded_preview_id`;
+  otherwise redraw the box around all of the object. Never ignore it and
+  re-run the same box.
 - `segment` returns `image` (whole frame, yellow fill) and `zoom` (close-up,
   outline only, cyan = the box used). **Open the zoom** and walk around the
   outline: every end of the object must be inside it.
+- **Too much?** The outline must follow the object's own edge. If it runs into
+  the shadow under or beside the object, the road or a neighbour, re-run with
+  `--neg x,y` on that part (and a snugger box).
 - **Still a partial mask?** Do not re-run the same box: it gives the same
   mask. Put `--pos x,y` on the part that is missing (SAM often stops at a
-  color or light boundary: sunlit half, shadowed half, two-tone vehicle), and
-  `--neg x,y` on anything that does not belong (another object, a stand).
+  color or light boundary: sunlit half, shadowed half, two-tone vehicle).
 - **Scope:** include exactly the object the user means: "the board" without its
   stand, "the car" without the trailer.
 - Up to 4 tries. A keyframe that covers 2/3 of the object is worse than none:

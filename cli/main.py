@@ -584,7 +584,7 @@ def cmd_segment(api: Api, a) -> dict:
     path = api.png("/api/video/render/frame", params,
                    Path(a.out or _views()) / f"preview_{a.frame:05d}_{res['preview_id']}.png")
     artifact = _artifact(api, path, kind="mask_preview", frame=a.frame, preview_id=res["preview_id"])
-    zoom = _zoom(api, a.frame, a.out, a.track, res["preview_id"], res.get("box") or box)
+    zoom = _zoom(api, a.frame, a.out, a.track, res["preview_id"], box)
     _activity(api, "mask.proposed", action="segment", status="completed", frame=a.frame,
                   preview_id=res["preview_id"], bbox=res.get("bbox"), score=res.get("score"),
                   render_url=(f"/api/video/render/frame?frame={a.frame}"
@@ -594,8 +594,6 @@ def cmd_segment(api: Api, a) -> dict:
     nxt = ("look at BOTH images (the zoom shows the edges). Accept only if the outline covers the whole "
            "object; then use the preview_id with `track create` or `track refine --preview`. Otherwise re-run "
            "segment: box around ALL of the object, --pos on the parts the mask misses, --neg on what leaks in")
-    if check.get("note"):
-        nxt = "NOTE: " + check["note"] + ". " + nxt
     if check.get("warning"):
         nxt = "WARNING: " + check["warning"] + ". " + nxt
     return {**res, "image": str(path), "zoom": str(zoom),

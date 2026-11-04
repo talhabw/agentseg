@@ -41,8 +41,7 @@ def test_video_track_lifecycle(tmp_path, monkeypatch):
             })
             assert preview.status_code == 200
             preview_json = preview.json()
-            # the fake mask fills its box, so segment keeps enlarging the box (as for a cut-off object)
-            assert preview_json["area"] > 72 and preview_json["check"]["grown"] and preview_json["preview_id"]
+            assert preview_json["area"] == 72 and preview_json["preview_id"]
 
             label = store.upsert_label(project.id, "object")
             created = client.post("/api/video/tracks", json={
