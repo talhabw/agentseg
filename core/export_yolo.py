@@ -226,7 +226,7 @@ def _do_export(
                     )
 
                 # Write empty label file
-                label_out_path.touch()  # Create empty file
+                label_out_path.write_text("")  # empty, also over a label left from an earlier export
 
                 if subset == "train":
                     stats["train_images"] += 1
