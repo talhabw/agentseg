@@ -415,41 +415,59 @@ def _keep_preview(frame: int, mask: np.ndarray, score: float) -> Preview:
     return p
 
 
-def _coverage_check(client, image, req: SegmentRequest, mask: np.ndarray) -> dict:
-    """Does the mask look like the whole object? A mask that touches the prompt box, or that
-    grows when the box is padded, usually means the box cut the object off."""
-    x0, y0, x1, y1 = req.box
+def _grow_to_object(client, image, req: SegmentRequest, mask: np.ndarray, score: float):
+    """A box that cuts the object off gives a mask of only part of it. Pad the box by 20% while
+    the mask keeps growing (and still holds the previous one), so the preview is the whole
+    object however tight the box was drawn. Returns (mask, score, box, check)."""
+    box = list(req.box)
     area = int(mask.sum())
-    out: dict = {"area": area}
+    check: dict = {"box_drawn": [round(v) for v in box]}
     if not area:
-        out["warning"] = "empty mask"
-        return out
-    bx0, by0, bx1, by1 = mask_to_bbox(mask)
-    touches = [n for n, hit in (("left", bx0 <= x0 + 3), ("top", by0 <= y0 + 3),
-                                ("right", bx1 >= x1 - 3), ("bottom", by1 >= y1 - 3)) if hit]
-    out["touches_box"] = touches
-    pw, ph = 0.2 * (x1 - x0), 0.2 * (y1 - y0)
+        check["warning"] = "empty mask: the box is probably not on the object"
+        return mask, score, box, check
     h, w = mask.shape
-    padded = [max(0, x0 - pw), max(0, y0 - ph), min(w - 1, x1 + pw), min(h - 1, y1 + ph)]
-    try:
+    grown = []
+
+    def touches(m, b):
+        bx0, by0, bx1, by1 = mask_to_bbox(m)
+        return [n for n, hit in (("left", bx0 <= b[0] + 3), ("top", by0 <= b[1] + 3),
+                                 ("right", bx1 >= b[2] - 3), ("bottom", by1 >= b[3] - 3)) if hit]
+
+    def main_part(m):  # share of the mask in its largest connected piece
+        from scipy import ndimage
+        lab, n = ndimage.label(m)
+        return 1.0 if n <= 1 else float(np.bincount(lab.ravel())[1:].max()) / max(1, int(m.sum()))
+
+    for i in range(4):
+        # a mask well inside its box is the whole object; one that runs into the edge was cut off
+        # (the first round always tries: a cut-off object does not always reach the edge)
+        if i and not touches(mask, box):
+            break
+        x0, y0, x1, y1 = box
+        pw, ph = 0.2 * (x1 - x0), 0.2 * (y1 - y0)
+        padded = [max(0, x0 - pw), max(0, y0 - ph), min(w - 1, x1 + pw), min(h - 1, y1 + ph)]
+        if padded == box:
+            break
         m2, s2 = client.segment(image.path, box=padded, points=req.pos + req.neg,
                                 point_labels=[1] * len(req.pos) + [0] * len(req.neg))
-    except Exception:
-        return out
-    m2 = drop_specks(m2)
-    a2 = int(m2.sum())
-    keeps = (m2 & mask).sum() / area  # the padded mask still holds the original one
-    out.update(padded_box=[round(v) for v in padded], padded_area=a2)
-    if a2 > 1.15 * area and keeps > 0.85:
-        p2 = _keep_preview(req.frame, m2, s2)
-        out["padded_preview_id"] = p2.id
-        out["warning"] = (f"the mask grows {a2 / area:.2f}x with a 20% larger box (bbox {mask_to_bbox(m2)}): "
-                          "your box probably cuts the object off. Look at the zoom; if the bigger mask is "
-                          "the whole object use padded_preview_id, else redraw the box around all of it")
-    elif touches:
-        out["warning"] = (f"the mask touches the box's {'/'.join(touches)} edge: check in the zoom that "
-                          "the object does not continue past it")
-    return out
+        m2 = drop_specks(m2)
+        a2 = int(m2.sum())
+        keeps = (m2 & mask).sum() / area  # the bigger mask still holds the previous one
+        # what it adds must be the same object, not separate pieces (road markings, a neighbour)
+        if not (a2 > 1.15 * area and keeps > 0.85 and a2 < 0.4 * h * w and main_part(m2) > 0.9):
+            break
+        grown.append(round(a2 / area, 2))
+        mask, score, box, area = m2, s2, padded, a2
+    if grown:
+        check["grown"] = grown
+        check["box_used"] = [round(v) for v in box]
+        check["note"] = (f"your box cut the object off: the mask grew {'x, '.join(map(str, grown))}x as the box "
+                         f"was enlarged to {check['box_used']}. Draw boxes with more margin")
+    edge = touches(mask, box)
+    if edge:
+        check["warning"] = (f"the mask still touches the box's {'/'.join(edge)} edge: check in the zoom "
+                            "that the object does not continue past it")
+    return mask, score, box, check
 
 
 @router.post("/segment")
@@ -461,7 +479,7 @@ def segment_preview(req: SegmentRequest):
                                      points=req.pos + req.neg,
                                      point_labels=[1] * len(req.pos) + [0] * len(req.neg))
         mask = drop_specks(mask)  # stray islands would stretch the bbox (and the label) past the object
-        check = _coverage_check(client, image, req, mask)
+        mask, score, box, check = _grow_to_object(client, image, req, mask, score)
     except Exception as exc:
         raise HTTPException(502, f"sam_server segmentation failed: {exc}")
     finally:
@@ -479,7 +497,7 @@ def segment_preview(req: SegmentRequest):
     except Exception:
         pass
     return {"preview_id": p.id, "frame": p.frame, "bbox": p.bbox,
-            "area": mask_area(p.mask), "score": p.score, "check": check}
+            "area": mask_area(p.mask), "score": p.score, "box": [round(v) for v in box], "check": check}
 
 
 @router.post("/tracks")

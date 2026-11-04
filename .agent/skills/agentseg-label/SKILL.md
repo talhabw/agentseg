@@ -73,26 +73,30 @@ agentseg view <f> --grid                          # 50 px labelled grid for read
 agentseg segment <f> --box x0,y0,x1,y1            # preview only, nothing saved
 ```
 
-- Read the box off the grid with a small margin (5–10 px) around the object.
-  The box must contain **all** of the object: find its leftmost, rightmost,
-  top and bottom pixels on the grid first (bumper to bumper, wheels, roof).
-- `segment` returns two images: `image` (whole frame, yellow fill) and `zoom`
-  (close-up, outline only). **Open both.** Judge the edges in the zoom: walk
-  around the outline and check every end of the object is inside it.
-- Read `check` and the `WARNING` in `next`. "mask grows with a larger box" or
-  "touches the box edge" almost always means your box cut the object off.
-- **Scope matters.** Include exactly the object the user means. If they say "the
-  board" and the mask also covers the stand or legs, re-run `segment` with
-  the same `--box` plus `--neg x,y` on the unwanted part. Add `--pos x,y` on a
-  missed part. Both flags can be repeated. Keep the box as it was and fix the
-  mask with clicks; change the box only if it missed part of the object.
-- **Half masks.** SAM often stops at a color or light boundary (sunlit half,
-  shadowed half, a two-tone vehicle). Put `--pos` on the part the mask
-  misses, not on the part it already has.
-- Iterate until the zoom shows the whole object, up to 4 tries. A keyframe
-  that covers 2/3 of the object is worse than none: the tracker copies it to
-  every frame and health cannot see it. If you cannot get a whole mask on this
-  frame, pick another frame where the object is clearer. Then:
+**Boxes: draw them big.** Your boxes tend to come out too small and cut the
+object off; that is the most common mistake in this task. A box that is too
+big costs nothing (SAM still picks the one object in it). A box that is too
+small gives a mask of part of the object.
+
+- On the grid, find the object's leftmost, rightmost, top and bottom pixels
+  (bumper to bumper, wheels and shadow-side edge, roof). Then add a margin of
+  about **20% of the object's width/height on every side**.
+- `segment` checks this for you: while the mask keeps growing with a larger
+  box, it enlarges the box itself and returns the grown mask. When
+  `check.note` says it grew, the returned `preview_id` already holds the
+  whole object, so use it. The note also tells you to draw bigger next time.
+- `segment` returns `image` (whole frame, yellow fill) and `zoom` (close-up,
+  outline only, cyan = the box used). **Open the zoom** and walk around the
+  outline: every end of the object must be inside it.
+- **Still a partial mask?** Do not re-run the same box: it gives the same
+  mask. Put `--pos x,y` on the part that is missing (SAM often stops at a
+  color or light boundary: sunlit half, shadowed half, two-tone vehicle), and
+  `--neg x,y` on anything that does not belong (another object, a stand).
+- **Scope:** include exactly the object the user means: "the board" without its
+  stand, "the car" without the trailer.
+- Up to 4 tries. A keyframe that covers 2/3 of the object is worse than none:
+  the tracker copies it to every frame and health cannot see it. If you cannot
+  get the whole object on this frame, pick another frame. Then:
 
 ```
 agentseg track create --label <resolved_label> --preview <preview_id>
