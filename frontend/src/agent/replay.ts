@@ -81,7 +81,7 @@ export async function startReplay(id: string, speed = 1): Promise<void> {
   // Frame numbers and track ids only mean something in the recording's own project.
   const root = data.run?.project_root_dir ?? data.events.find((e) => e.project_root_dir)?.project_root_dir;
   const project = useProjectStore.getState().project;
-  if (root && project && root !== project.root_dir) {
+  if (root && root !== project?.root_dir) {
     await useProjectStore.getState().openProject(root);
     return;  // the project change starts the replay again
   }

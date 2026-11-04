@@ -138,7 +138,15 @@ export function useAgentRuntime() {
 
   // Replay or catch up once the project and its frames are known.
   useEffect(() => {
-    if (!projectKey || !imageCount) return;
+    if (!projectKey) {
+      // A replay link on a backend with no project open: the replay opens its own project.
+      const replay = replayParams();
+      if (replay) void startReplay(replay.id, replay.speed).catch((err) => {
+        useUIStore.getState().addToast(String(err.message ?? err), 'error');
+      });
+      return;
+    }
+    if (!imageCount) return;
     projectGen++;
     hydrating = false;
     buffered = [];
