@@ -86,6 +86,14 @@ export interface SheetView {
   t0: number;
 }
 
+/** A close-up the agent opened (`view --zoom`, or the zoom `segment` writes). */
+export interface ZoomView {
+  frame: number;
+  trackId?: number;
+  previewId?: string;
+  t0: number;
+}
+
 /** The tool call the agent is running now (or ran last), as the bubble shows it. */
 export interface AgentAction {
   id: string;
@@ -142,6 +150,7 @@ interface AgentState {
   focusFrame: number | null;
   focusSeq: number;       // bumps on every focus request, so re-focusing the same frame still follows
   sheet: SheetView | null;
+  zoom: ZoomView | null;
   tracks: Record<number, TrackView>;
   recentLabel: { name: string; id?: number; t0: number } | null;
   replay: ReplayState | null;
@@ -169,6 +178,7 @@ export const useAgentStore = create<AgentState>()((set) => ({
   focusFrame: null,
   focusSeq: 0,
   sheet: null,
+  zoom: null,
   tracks: {},
   recentLabel: null,
   replay: null,
@@ -187,6 +197,7 @@ export const useAgentStore = create<AgentState>()((set) => ({
     beat: null,
     focusFrame: null,
     sheet: null,
+    zoom: null,
     tracks: {},
     recentLabel: null,
     dismissed: false,

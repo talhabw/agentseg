@@ -372,3 +372,17 @@ def test_segment_helper_maps_pos_neg(fake, frames):
     m, s = e.segment(3, box=(1, 1, 5, 5), pos=[(2, 2)], neg=[(4, 4)])
     assert m.shape == (H, W) and s == 0.9
     assert fake.calls[-1] == ("segment", frames.path(3), (1, 1, 5, 5))
+
+
+def test_max_lost_stops_a_direction_and_leaves_the_rest_pending(fake, frames):
+    # the fake slides the mask right by 1 px per frame, so it leaves the frame after ~W frames
+    e = engine(fake, frames)
+    e.add_track(1)
+    e.add_keyframe(1, 0, box_mask(H, W, (W - 6, 5, W - 2, 10)))
+    events = list(e.propagate(max_lost=3))
+    lost = [ev for ev in events if ev.kind == "lost"]
+    assert len(lost) == 1
+    info = lost[0].info
+    assert info["direction"] == "forward" and info["stopped_at"] == info["lost_from"] + 2
+    assert all(f <= info["stopped_at"] for f in e.track(1).masks)
+    assert any(s.kf == 0 for s in e._pending_segments(e.track(1)))  # the cut rest is tracked again next time

@@ -40,6 +40,7 @@ _VIEW_RE = {
     "frame": re.compile(r"^frame_(?P<frame>\d+)(?:_t(?P<track>\d+))?(?P<preview>_preview)?(?P<grid>_grid)?\.png$"),
     "preview": re.compile(r"^preview_(?P<frame>\d+)_(?P<pid>[0-9a-f]+)\.png$"),
     "sheet": re.compile(r"^sheet_(?:t(?P<track>\d+)_)?(?P<tag>.+)\.png$"),
+    "zoom": re.compile(r"^zoom_(?P<frame>\d+)(?:_t(?P<track>\d+))?(?:_(?P<pid>[0-9a-f]{16}))?\.png$"),
 }
 
 
@@ -144,6 +145,14 @@ def parse_view_path(path: str) -> Optional[dict]:
             view["track_id"] = int(m["track"])
         if m["preview"]:
             view["kind"] = "mask_preview"
+        return view
+    m = _VIEW_RE["zoom"].match(name)
+    if m:
+        view = {"kind": "zoom", "frame": int(m["frame"]), "path": path}
+        if m["track"]:
+            view["track_id"] = int(m["track"])
+        if m["pid"]:
+            view["preview_id"] = m["pid"]
         return view
     m = _VIEW_RE["sheet"].match(name)
     if m:

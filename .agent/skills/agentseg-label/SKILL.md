@@ -27,6 +27,10 @@ agentseg up                # starts whatever is down (sam_server takes ~1–2 mi
 ```
 
 If `up` fails, read the log path it prints. Do not kill other GPU processes.
+**Never run `agentseg down`** during a run: the backend hosts you, and stopping it
+ends your run. The GPU may be shared, so a command can fail with a sam_server
+error (CUDA out of memory). Wait 30–60 s and retry it; `agentseg up` only starts
+what is down. If it keeps failing, stop and report.
 
 ## 1. Open the project and find the object
 
@@ -70,18 +74,60 @@ agentseg segment <f> --box x0,y0,x1,y1            # preview only, nothing saved
 ```
 
 - Read the box off the grid with a small margin (5–10 px) around the object.
-- Open the preview image. The yellow fill is the proposed mask, with an outline.
+  The box must contain **all** of the object: find its leftmost, rightmost,
+  top and bottom pixels on the grid first (bumper to bumper, wheels, roof).
+- `segment` returns two images: `image` (whole frame, yellow fill) and `zoom`
+  (close-up, outline only). **Open both.** Judge the edges in the zoom: walk
+  around the outline and check every end of the object is inside it.
+- Read `check` and the `WARNING` in `next`. "mask grows with a larger box" or
+  "touches the box edge" almost always means your box cut the object off.
 - **Scope matters.** Include exactly the object the user means. If they say "the
   board" and the mask also covers the stand or legs, re-run `segment` with
   the same `--box` plus `--neg x,y` on the unwanted part. Add `--pos x,y` on a
   missed part. Both flags can be repeated. Keep the box as it was and fix the
   mask with clicks; change the box only if it missed part of the object.
-- Iterate until the preview is right, at most 3 tries. Then:
+- **Half masks.** SAM often stops at a color or light boundary (sunlit half,
+  shadowed half, a two-tone vehicle). Put `--pos` on the part the mask
+  misses, not on the part it already has.
+- Iterate until the zoom shows the whole object, up to 4 tries. A keyframe
+  that covers 2/3 of the object is worse than none: the tracker copies it to
+  every frame and health cannot see it. If you cannot get a whole mask on this
+  frame, pick another frame where the object is clearer. Then:
 
 ```
 agentseg track create --label <resolved_label> --preview <preview_id>
 agentseg track propagate <track_id>               # ~1 min per 500 frames; returns issues
 ```
+
+For keyframes added later, pass `--track T` to `segment`: the zoom then also
+shows the track's nearest keyframe, so you can check it is the same object.
+
+## 3b. When tracking loses the object
+
+SAM 3 usually picks the object up again by itself after it was gone for a
+while, so short gaps need nothing. `propagate` stops tracking in a direction
+only once the mask has been empty for 60 frames in a row, and returns `lost`:
+
+```
+"lost": [{"keyframe": 420, "direction": "forward", "lost_from": 579, "stopped_at": 638, "untracked": [639, 999]}]
+```
+
+The more common failure is the opposite: after a gap SAM comes back on a
+*different*, similar object. Wherever the track reappears after empty frames
+(red in `sheet --track`), check identity with `view <first frame after the gap> --track T --zoom`.
+
+Deal with `lost` **before** issues. Look at what really happens from
+`lost_from`: `agentseg sheet --frames <lost_from-5>-<lost_from+40>` (without
+`--track`, so you see the plain frames).
+
+- The object is gone (tunnel, behind a building, camera looks away, a cut):
+  find where it comes back, `track absent T <lost_from>-<last gone frame> --no-propagate`,
+  then `segment` + `track refine` on a clear frame where it is back.
+- The object is still visible: the tracker dropped it. `segment` +
+  `track refine` on a clear frame right after `lost_from`.
+- It never comes back before the end: mark the rest `absent`.
+
+Each fix re-propagates; repeat until there is no `lost`.
 
 Use the label name the user gave, or a short descriptive one such as `torpedo_board`.
 
@@ -101,13 +147,26 @@ agentseg view <worst_frame> --track <T> --grid
 ```
 
 In the view, the track mask is magenta with an outline. A yellow box marks a
-keyframe and a cyan box a propagated frame.
+keyframe and a cyan box a propagated frame. The tint hides the object's color;
+for anything about identity or coverage use the close-up:
+
+```
+agentseg view <f> --track <T> --zoom     # [nearest keyframe] [frame] [frame + outline], no fill
+```
+
+**Identity.** After an occlusion, a tunnel, a camera cut or a fast pan, SAM
+often jumps to a *similar* object nearby. Compare with the keyframe panel:
+same color, same body type (SUV vs sedan, hatchback vs trunk), same details?
+"A dark car in the right place" is not enough. Any issue whose `reasons` has
+`dino_low` (the mask looks unlike the keyframe) needs a zoom comparison before
+you may review it. If it is another object, the real one is either elsewhere
+(`segment` + `track refine` on it) or not visible (`track absent`).
 
 | What you see | Action |
 |---|---|
 | Mask is correct; the object just got smaller, larger, rotated or moved fast | **Mark it checked:** `agentseg track review T <issue_id> --note "<one line why>"`. Its frames turn from review to approved. |
 | Mask spills onto background or other objects, or has stray specks far away (huge bbox) | `segment` that frame with a tight box (+ `--neg` on the spill), then `track refine T <f> --preview P` |
-| Mask covers only part of the object, or sits on the wrong object | Same: `segment` → `track refine` |
+| Mask covers only part of the object (check the zoom), or sits on the wrong object (compare with the keyframe panel) | Same: `segment` → `track refine` |
 | Object is not visible at all (out of frame, fully occluded), but a mask exists | `track absent T <range>`. Find the range first with `sheet --track T --frames a-b`. |
 | Object is visible but there is no mask (red "empty" in the sheet) | `segment` → `track refine` on a frame where it is clearly visible |
 
@@ -126,7 +185,9 @@ Rules:
   checks later.
 - Only `review` an issue after you looked at its frames. For a long issue,
   check a `sheet --track T --frames a-b` of the range, not just `worst_frame`.
-  Several checked issues at once: `track review T 2,3,5 --note ...`.
+  Several checked issues at once: `track review T 2,3,5 --note ...`, but only
+  issues of the same kind that you actually checked; the note must be true
+  for every id in it. Never review a `lost` issue (empty frames) as "mask correct".
 - Budget: about 10 fixes and about 40 viewed images per sequence. Prefer one
   `sheet` over many `view`s when scanning a range.
 
@@ -160,11 +221,11 @@ Short:
 agentseg status | up [--no-sam] [--no-ui] | down [--all]
 agentseg project open <dir> [--name N] [--project-dir D]
 agentseg labels [--add NAME]
-agentseg view <f> [--track T] [--grid] [--preview P]
+agentseg view <f> [--track T] [--grid] [--preview P] [--zoom]
 agentseg sheet [--track T] [--every N | --frames a-b,c]
-agentseg segment <f> --box x0,y0,x1,y1 [--pos x,y]... [--neg x,y]... [--no-grid]
+agentseg segment <f> --box x0,y0,x1,y1 [--pos x,y]... [--neg x,y]... [--track T] [--no-grid]
 agentseg track create --label L --preview P
-agentseg track propagate T [--full] [--start a --end b] [--no-wait]
+agentseg track propagate T [--full] [--start a --end b] [--max-lost N] [--no-wait]
 agentseg track issues T [--verbose]
 agentseg track review T <ids|all> [--note TEXT]
 agentseg track refine T <f> (--preview P | --box ... [--pos ..] [--neg ..]) [--no-propagate]

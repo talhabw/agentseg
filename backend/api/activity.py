@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import queue
 import threading
 import time
@@ -102,7 +103,13 @@ def publish(
             (project.id, run_id, source, event_type, action, status, message,
              json.dumps(payload, separators=(",", ":"), default=str), now),
         )
-        store.conn.commit()
+        try:
+            store.conn.commit()
+        except sqlite3.OperationalError as exc:
+            # the connection is shared across request threads; another thread's commit already
+            # committed this insert
+            if "no transaction is active" not in str(exc):
+                raise
         event_id = int(cur.lastrowid)
     event = {
         "id": event_id,

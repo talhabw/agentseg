@@ -333,8 +333,8 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
     store.patch(() => ({ cursor: { id: ++scratch.cueId, target, t0: opts.now, speed: opts.speed, click, leave } }));
   };
   const jump = (frame: number) => store.patch((s) => (opts.hydrate
-    ? { focusFrame: frame, sheet: null }   // one jump at the end, not one per event
-    : { focusFrame: frame, focusSeq: s.focusSeq + 1, sheet: null }));
+    ? { focusFrame: frame, sheet: null, zoom: null }   // one jump at the end, not one per event
+    : { focusFrame: frame, focusSeq: s.focusSeq + 1, sheet: null, zoom: null }));
   /**
    * Go to a frame. A frame the agent picks itself is clicked: on the overview
    * tile when the overview is open, otherwise on the timeline.
@@ -401,7 +401,17 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
         setActivity(ev.view ? 'thinking' : 'acting', act.tool);
       }
       // Reading an image is when the agent actually looks; only then does the overview show.
-      const view = ev.view as { kind?: string; frame?: number; track_id?: number } | undefined;
+      const view = ev.view as { kind?: string; frame?: number; track_id?: number; preview_id?: string } | undefined;
+      if (view?.kind === 'zoom' && typeof view.frame === 'number') {
+        // The close-up it reads is what the person sees too, until the agent acts on it.
+        if (!opts.hydrate) store.patch(() => ({ sheet: null, zoom: { frame: view.frame!, trackId: view.track_id,
+          previewId: view.preview_id, t0: opts.now } }));
+        push({ kind: 'step', state: 'done', frame: view.frame,
+          text: `Looked closely at frame ${human(view.frame)}`,
+          meta: view.preview_id ? 'whole object?' : 'same object? whole object?' });
+      } else if (!view && useAgentStore.getState().zoom) {
+        store.patch(() => ({ zoom: null }));
+      }
       if (view?.kind === 'contact_sheet' && scratch.pendingSheet) {
         const sheet = scratch.pendingSheet;
         scratch.pendingSheet = null;
@@ -589,6 +599,26 @@ export function applyAgentEvent(ev: AgentActivityEvent, opts: ApplyOptions): voi
       actionResult(['track propagate'], { result: meta, state: 'done' });
       scratch.propagateStep.delete(id);
       setActivity('thinking', issues.length ? 'Reviewing the flagged frames' : 'Checking the result');
+      return;
+    }
+
+    case 'track.lost': {
+      // SAM stopped finding the object, so tracking in that direction stopped: the agent takes over.
+      const id = num(ev.track_id);
+      const from = num(ev.frame);
+      if (id == null || from == null) return;
+      const untracked = Array.isArray(ev.untracked) ? (ev.untracked as number[]) : [];
+      if (untracked.length === 2) {
+        const tv = track(id);
+        const statuses = [...tv.statuses];
+        const [a, b] = [Math.min(...untracked), Math.max(...untracked)];
+        for (let f = a; f <= b && f < statuses.length; f++) {
+          if (statuses[f] !== 'keyframe' && statuses[f] !== 'absent') statuses[f] = null;
+        }
+        putTrack({ ...tv, statuses });
+      }
+      push({ kind: 'step', state: 'done', text: `Lost the object at frame ${human(from)}: stopped tracking there`, frame: from });
+      if (!opts.hydrate) jump(from);
       return;
     }
 
