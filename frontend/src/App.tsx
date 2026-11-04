@@ -21,7 +21,10 @@ import { handleLiveAgentEvent, useAgentRuntime } from './agent/useAgentRuntime';
 import { AgentCursor } from './agent/AgentCursor';
 import { agentPropagating } from './agent/agentStore';
 import { SheetOverlay } from './agent/SheetOverlay';
+import { ZoomOverlay } from './agent/ZoomOverlay';
 import { TrackTimeline } from './agent/TrackTimeline';
+import { AgentCaption } from './agent/AgentCaption';
+import { RunLog } from './agent/RunLog';
 import {
   getTrackingJobId,
   isTrackingJobPaused,
@@ -488,10 +491,13 @@ function AppContent() {
           <div className="relative flex-1 min-h-0 flex">
             <ImageCanvas />
             <SheetOverlay />
+            <ZoomOverlay />
+            <AgentCaption />
           </div>
           <TrackTimeline />
         </div>
         <Sidebar />
+        <RunLog />
       </div>
 
       <AgentCursor />

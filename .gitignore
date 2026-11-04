@@ -51,6 +51,7 @@ Thumbs.db
 # agentseg CLI state (projects, views, logs)
 .autoseg/
 .agentseg/
+.agentseg-*/
 
 # Secrets for `agentseg up` / the agent launcher (META_API_KEY); never commit
 .env

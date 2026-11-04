@@ -27,13 +27,14 @@ export function SheetOverlay() {
 
   return (
     <div
-      className="absolute inset-0 z-10 flex items-center justify-center bg-background p-6 animate-in fade-in duration-200"
+      // The bottom padding keeps the tiles clear of Muse's caption.
+      className="absolute inset-0 z-10 flex items-center justify-center bg-background px-6 pt-6 pb-[168px] animate-in fade-in duration-200"
       onPointerDown={() => useAgentStore.setState({ sheet: null })}
       title="The overview Muse is reading. Click to return to the frame."
     >
       <div
         className="grid w-full gap-1.5"
-        style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, maxWidth: `calc((100vh - 220px) * ${aspect} * ${cols} / ${Math.ceil(shown.frames.length / cols)})` }}
+        style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, maxWidth: `calc((100vh - 380px) * ${aspect} * ${cols} / ${Math.ceil(shown.frames.length / cols)})` }}
       >
         {shown.frames.map((f) => {
           const image = images[f];

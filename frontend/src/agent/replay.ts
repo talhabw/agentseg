@@ -81,7 +81,15 @@ export async function startReplay(id: string, speed = 1): Promise<void> {
   // Frame numbers and track ids only mean something in the recording's own project.
   const root = data.run?.project_root_dir ?? data.events.find((e) => e.project_root_dir)?.project_root_dir;
   const project = useProjectStore.getState().project;
-  if (root && project && root !== project.root_dir) {
+  if (root && root !== project?.root_dir) {
+    // The backend has one open project for everyone: switching it would pull a live
+    // agent run out of its own project.
+    const runs = await fetch('/api/agent/runs').then((r) => r.json()).catch(() => ({ runs: [] }));
+    if (gen !== generation) return;
+    if ((runs.runs ?? []).some((r: { status?: string }) => r.status === 'running')) {
+      throw new Error('An agent run is live on this backend. The replay would switch its project, '
+        + 'so it waits: open the replay again once the run has finished.');
+    }
     await useProjectStore.getState().openProject(root);
     return;  // the project change starts the replay again
   }

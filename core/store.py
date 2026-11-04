@@ -987,6 +987,17 @@ class ProjectStore:
             out.append(d)
         return out
 
+    def review_issues(self, track_id: int, issue_ids: Optional[list[int]], by: str,
+                      note: Optional[str] = None) -> list[dict]:
+        """Mark issues as checked ('ok'); None = every open issue of the track. Returns them."""
+        issues = [i for i in self.list_issues(track_id)
+                  if (i["id"] in issue_ids if issue_ids is not None else not i.get("review"))]
+        for i in issues:
+            self.conn.execute("UPDATE issues SET review = 'ok', reviewed_by = ?, review_note = ? WHERE id = ?",
+                              (by, note, i["id"]))
+        self.commit()
+        return issues
+
     def clear_issues(self, track_id: int) -> None:
         self.conn.execute("DELETE FROM issues WHERE track_id = ?", (track_id,))
         self.commit()

@@ -138,7 +138,7 @@ class AgentRun:
         prompt_file.write_text(build_prompt(self.instruction, self.images))
         cmd = build_muse_command(muse, prompt_file, self.model, self.effort)
         env = {**os.environ, API_KEY_ENV: api_key, "AGENTSEG_BACKEND": self.backend_url,
-               "PYTHONUNBUFFERED": "1"}
+               "AGENTSEG_AGENT_RUN": self.id, "PYTHONUNBUFFERED": "1"}
         if self.agentseg_home:
             env["AGENTSEG_HOME"] = self.agentseg_home
         with open(self.stderr_log, "ab") as err:

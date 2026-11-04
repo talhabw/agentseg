@@ -156,8 +156,20 @@
   to { opacity: 0; }
 }
 
+/* The agent's dot breathes while it works. */
+.agent-pulse { animation: agent-pulse 1.6s ease-in-out infinite; }
+@keyframes agent-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 #a594ff66; }
+  50% { box-shadow: 0 0 0 4px #a594ff00; }
+}
+
+.agent-drawer { animation: agent-drawer 180ms ease-out; }
+@keyframes agent-drawer {
+  from { transform: translateX(24px); opacity: 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .agent-shimmer, .agent-word, .agent-rise { animation: none; }
+  .agent-shimmer, .agent-word, .agent-rise, .agent-pulse, .agent-drawer { animation: none; }
 }
 
 @layer base {

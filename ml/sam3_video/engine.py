@@ -90,7 +90,7 @@ class Segment:
 
 @dataclass
 class PropagationEvent:
-    kind: str  # "start" | "segment" | "frame" | "done"
+    kind: str  # "start" | "segment" | "frame" | "lost" | "done"
     track_id: Optional[TrackId] = None
     frame: Optional[int] = None
     mask: Optional[np.ndarray] = None  # "frame": the track's new mask on that frame
@@ -317,12 +317,15 @@ class TrackEngine:
     # ── propagation ──
 
     def propagate(self, track_ids: Optional[Iterable[TrackId]] = None, *, full: bool = False,
-                  frame_range: Optional[tuple[int, int]] = None) -> Iterator[PropagationEvent]:
+                  frame_range: Optional[tuple[int, int]] = None,
+                  max_lost: int = 0) -> Iterator[PropagationEvent]:
         """Bring the given tracks (default: all) up to date with their keyframes.
 
         full: rebuild from scratch (fresh SAM object, every segment).
         frame_range: (lo, hi) inclusive; segments are clipped to it (clipped segments stay
         pending for the frames outside).
+        max_lost: stop a segment after this many empty masks in a row (frames marked absent
+        do not count) and yield a "lost" event; its untracked rest stays pending. 0 = never.
         """
         ids = list(self.tracks) if track_ids is None else [self._track(i).track_id for i in track_ids]
         if full:
@@ -345,6 +348,8 @@ class TrackEngine:
             yield PropagationEvent("segment", t.track_id, segment=run, done=done, total=total)
             seg_t0 = time.time()
             stream = self.client.propagate(self.session_id, run.kf, run.direction, max_frames=len(run))
+            absent = set(t.absent_frames()) if max_lost else set()
+            empty_from, empty_n, cut = None, 0, None
             try:
                 for out in stream:
                     f = out.frame_index
@@ -363,8 +368,28 @@ class TrackEngine:
                     done += 1
                     yield PropagationEvent("frame", t.track_id, frame=f, mask=m, segment=run, done=done,
                                            total=total)
+                    if max_lost and f not in absent:
+                        if m.any():
+                            empty_from, empty_n = None, 0
+                        else:
+                            empty_from = f if empty_from is None else empty_from
+                            empty_n += 1
+                            if empty_n >= max_lost:
+                                cut = f
+                                break
             finally:
                 stream.close()  # cancels server-side if interrupted
+            if cut is not None:
+                # drop stale masks past the cut: those frames are untracked, not "lost"
+                rest = [f for f in run.frames if (f > cut if run.direction == FORWARD else f < cut)]
+                for f in rest:
+                    t.masks.pop(f, None); t.origin.pop(f, None)
+                done += len(rest)
+                yield PropagationEvent("lost", t.track_id, frame=empty_from, segment=run, done=done,
+                                       total=total, info={"keyframe": run.kf, "direction": run.direction,
+                                                          "lost_from": empty_from, "stopped_at": cut,
+                                                          "untracked": [rest[0], rest[-1]] if rest else None})
+                run = Segment(run.kf, run.direction, cut)
             self.stats["sam_frames"] += len(run)
             self.stats["sam_seconds"] += time.time() - seg_t0
             self.stats["segments"] += 1
@@ -375,10 +400,10 @@ class TrackEngine:
     def run(self, track_ids: Optional[Iterable[TrackId]] = None, *, full: bool = False,
             frame_range: Optional[tuple[int, int]] = None,
             on_event: Optional[Callable[[PropagationEvent], None]] = None,
-            should_stop: Optional[Callable[[], bool]] = None) -> dict:
+            should_stop: Optional[Callable[[], bool]] = None, max_lost: int = 0) -> dict:
         """Drain ``propagate()``; returns {"frames", "seconds", "stopped"}."""
         t0 = time.time()
-        gen = self.propagate(track_ids, full=full, frame_range=frame_range)
+        gen = self.propagate(track_ids, full=full, frame_range=frame_range, max_lost=max_lost)
         n, stopped = 0, False
         try:
             for ev in gen:

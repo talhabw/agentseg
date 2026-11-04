@@ -47,11 +47,12 @@ class VideoTrackJob:
     """Background TrackEngine run with the same polling event shape as track_jobs."""
     def __init__(self, project_id: int, track_id: int, engine: TrackEngine,
                  store_db: str, frame_range: Optional[tuple[int, int]] = None,
-                 full: bool = False):
+                 full: bool = False, max_lost: int = 0):
         self.id = uuid.uuid4().hex[:12]
         self.project_id, self.track_id = project_id, track_id
         self.engine, self.store_db = engine, store_db
-        self.frame_range, self.full = frame_range, full
+        self.frame_range, self.full, self.max_lost = frame_range, full, max_lost
+        self.lost: list[dict] = []  # segments cut short because the tracker lost the object
         self.status = "pending"
         self.error: Optional[str] = None
         self.started_at = time.time()
@@ -114,7 +115,7 @@ class VideoTrackJob:
     def snapshot(self):
         return {"id": self.id, "project_id": self.project_id, "track_id": self.track_id,
                 "status": self.status, "frame_range": self.frame_range,
-                "full": self.full, "counts": dict(self.counts), "error": self.error,
+                "full": self.full, "counts": dict(self.counts), "error": self.error, "lost": self.lost,
                 "last_seq": self.last_seq, "created_at": self.started_at,
                 "finished_at": self.finished_at}
 
@@ -125,6 +126,27 @@ class VideoTrackJob:
     def stop(self):
         self._stop = True
 
+    def _restore_unchanged(self, store, lo: int, hi: int, written: set[int]) -> None:
+        """The range was cleared up front, but the engine only recomputes segments that changed:
+        write back its still-valid masks for the frames it skipped (an untouched keyframe's
+        segments inside a wide dirty range)."""
+        t = self.engine.track(self.track_id)
+        track = store.get_track(self.track_id)
+        for frame in range(lo, hi + 1):
+            if frame in written or frame in t.keyframes:
+                continue
+            m = t.masks.get(frame)
+            if m is None or not m.any():
+                continue
+            image = store.get_image_by_index(self.project_id, frame)
+            if image is None or track is None:
+                continue
+            store.create_annotation(
+                image.id, track.label_id, mask_to_bbox(m), source="propagated", status="approved",
+                confidence=None, mask_rle=mask_to_rle(m),
+                polygon_norm=mask_to_yolo_polygon(m, image.width, image.height), track_id=self.track_id)
+            self.counts["frames"] += 1
+
     def run(self):
         from core.store import ProjectStore
         store = ProjectStore(self.store_db)
@@ -134,6 +156,7 @@ class VideoTrackJob:
             store.delete_propagated_annotations(self.track_id, lo, hi)
             store.clear_issues(self.track_id)
             self.emit("started", start_frame=lo, end_frame=hi)
+            written: set[int] = set()
 
             def on_event(ev):
                 if self._stop:
@@ -146,6 +169,7 @@ class VideoTrackJob:
                     track = store.get_track(self.track_id)
                     if image is None or track is None:
                         return
+                    written.add(frame)
                     m = np.asarray(ev.mask, dtype=bool)
                     if not m.any():  # tracker says "not here": no annotation, export writes nothing
                         self.emit("frame", frame=frame, visible=False,
@@ -163,17 +187,21 @@ class VideoTrackJob:
                               render_url=(f"/api/video/render/frame?frame={frame}"
                                           f"&track_id={self.track_id}"),
                               progress=self.counts["frames"])
+                elif ev.kind == "lost":
+                    self.lost.append(ev.info)
+                    self.emit("lost", **ev.info)
                 elif ev.kind in {"start", "segment"}:
                     self.emit(ev.kind, frame=getattr(ev, "frame", None),
                               done=ev.done, total=ev.total)
 
             self.engine.run(track_ids=[self.track_id], full=self.full,
                             frame_range=self.frame_range, on_event=on_event,
-                            should_stop=lambda: self._stop)
+                            should_stop=lambda: self._stop, max_lost=self.max_lost)
             if self._stop:
                 self.status = "stopped"
                 self.emit("stopped")
                 return
+            self._restore_unchanged(store, lo, hi, written)
 
             embed = _embedder(self.engine)
             health, issues = assess(self.engine, self.track_id,
@@ -270,7 +298,8 @@ def _engine() -> TrackEngine:
             eng.close()
         images = store.list_images(project.id)
         frames = FrameSet([i.path for i in images], root=str(Path(project.root_dir) / ".agentseg" / "frames"))
-        eng = TrackEngine(_client(), frames)
+        # decoded frames live in CPU RAM: saves most of SAM's VRAM on a shared GPU
+        eng = TrackEngine(_client(), frames, offload_video_to_cpu=os.getenv("VIDEO_OFFLOAD_TO_CPU", "1") == "1")
         _ENGINES[key] = eng
         return eng
 
@@ -351,6 +380,7 @@ class CreateTrackRequest(BaseModel):
 
 class PropagateRequest(BaseModel):
     full: bool = False
+    max_lost: int = 0  # stop a direction after this many empty frames in a row (0 = never)
     start: Optional[int] = None
     end: Optional[int] = None
 
@@ -376,6 +406,52 @@ def _image_for_frame(frame: int):
     return image
 
 
+def _keep_preview(frame: int, mask: np.ndarray, score: float) -> Preview:
+    p = Preview(uuid.uuid4().hex[:16], get_project().id, frame, mask, float(score), mask_to_bbox(mask))
+    _PREVIEWS[p.id] = p
+    _save_preview_mask(p)
+    while len(_PREVIEWS) > _PREVIEW_LIMIT:
+        _PREVIEWS.popitem(last=False)
+    return p
+
+
+def _coverage_check(client, image, req: SegmentRequest, mask: np.ndarray) -> dict:
+    """Does the mask look like the whole object? A mask that touches the prompt box, or that
+    grows when the box is padded, usually means the box cut the object off."""
+    x0, y0, x1, y1 = req.box
+    area = int(mask.sum())
+    out: dict = {"area": area}
+    if not area:
+        out["warning"] = "empty mask"
+        return out
+    bx0, by0, bx1, by1 = mask_to_bbox(mask)
+    touches = [n for n, hit in (("left", bx0 <= x0 + 3), ("top", by0 <= y0 + 3),
+                                ("right", bx1 >= x1 - 3), ("bottom", by1 >= y1 - 3)) if hit]
+    out["touches_box"] = touches
+    pw, ph = 0.2 * (x1 - x0), 0.2 * (y1 - y0)
+    h, w = mask.shape
+    padded = [max(0, x0 - pw), max(0, y0 - ph), min(w - 1, x1 + pw), min(h - 1, y1 + ph)]
+    try:
+        m2, s2 = client.segment(image.path, box=padded, points=req.pos + req.neg,
+                                point_labels=[1] * len(req.pos) + [0] * len(req.neg))
+    except Exception:
+        return out
+    m2 = drop_specks(m2)
+    a2 = int(m2.sum())
+    keeps = (m2 & mask).sum() / area  # the padded mask still holds the original one
+    out.update(padded_box=[round(v) for v in padded], padded_area=a2)
+    if a2 > 1.15 * area and keeps > 0.85:
+        p2 = _keep_preview(req.frame, m2, s2)
+        out["padded_preview_id"] = p2.id
+        out["warning"] = (f"the mask grows {a2 / area:.2f}x with a 20% larger box (bbox {mask_to_bbox(m2)}): "
+                          "your box probably cuts the object off. Look at the zoom; if the bigger mask is "
+                          "the whole object use padded_preview_id, else redraw the box around all of it")
+    elif touches:
+        out["warning"] = (f"the mask touches the box's {'/'.join(touches)} edge: check in the zoom that "
+                          "the object does not continue past it")
+    return out
+
+
 @router.post("/segment")
 def segment_preview(req: SegmentRequest):
     image = _image_for_frame(req.frame)
@@ -384,18 +460,15 @@ def segment_preview(req: SegmentRequest):
         mask, score = client.segment(image.path, box=req.box,
                                      points=req.pos + req.neg,
                                      point_labels=[1] * len(req.pos) + [0] * len(req.neg))
+        mask = drop_specks(mask)  # stray islands would stretch the bbox (and the label) past the object
+        check = _coverage_check(client, image, req, mask)
     except Exception as exc:
         raise HTTPException(502, f"sam_server segmentation failed: {exc}")
     finally:
         close = getattr(client, "close", None)
         if close:
             close()
-    mask = drop_specks(mask)  # stray islands would stretch the bbox (and the label) past the object
-    p = Preview(uuid.uuid4().hex[:16], get_project().id, req.frame, mask, float(score), mask_to_bbox(mask))
-    _PREVIEWS[p.id] = p
-    _save_preview_mask(p)
-    while len(_PREVIEWS) > _PREVIEW_LIMIT:
-        _PREVIEWS.popitem(last=False)
+    p = _keep_preview(req.frame, mask, score)
     try:
         publish_activity("mask.proposed", source="backend", action="segment", status="completed",
                          project_id=p.project_id, frame=p.frame, preview_id=p.id,
@@ -406,7 +479,7 @@ def segment_preview(req: SegmentRequest):
     except Exception:
         pass
     return {"preview_id": p.id, "frame": p.frame, "bbox": p.bbox,
-            "area": mask_area(p.mask), "score": p.score}
+            "area": mask_area(p.mask), "score": p.score, "check": check}
 
 
 @router.post("/tracks")
@@ -457,7 +530,7 @@ def start_propagate(track_id: int, req: PropagateRequest = PropagateRequest()):
         if lo < 0 or hi >= eng.num_frames or lo > hi:
             raise HTTPException(400, "Invalid frame range")
         job = VideoTrackJob(project.id, track_id, eng, store.db_path,
-                            frame_range=(lo, hi), full=req.full)
+                            frame_range=(lo, hi), full=req.full, max_lost=max(0, req.max_lost))
         _JOBS[job.id] = job
         eng._video_dirty_range = None
         job.start()
@@ -540,6 +613,33 @@ def remove_video_keyframe(track_id: int, frame: int):
     return {"track_id": track_id, "frame": frame, "removed": True}
 
 
+class IssueReviewRequest(BaseModel):
+    issue_ids: Optional[list[int]] = None  # None = all open issues
+    by: str = "agent"
+    note: Optional[str] = None
+
+
+@router.post("/tracks/{track_id}/issues/review")
+def review_track_issues(track_id: int, req: IssueReviewRequest):
+    """The reviewer looked at these issues and the masks are right: approve their
+    propagated frames so they stop showing as needs_review."""
+    store = get_store()
+    known = {i["id"] for i in store.list_issues(track_id)}
+    unknown = sorted(set(req.issue_ids or []) - known)
+    if unknown:
+        raise HTTPException(404, f"unknown issue id(s) for track {track_id}: {unknown}")
+    issues = store.review_issues(track_id, req.issue_ids, req.by, req.note)
+    approved = 0
+    for ann, image in store.list_track_annotations(track_id):
+        if ann.source == "propagated" and ann.status == "needs_review" and any(
+                i["start_frame"] <= image.order_index <= i["end_frame"] for i in issues):
+            store.update_annotation(ann.id, status="approved")
+            approved += 1
+    return {"track_id": track_id, "reviewed": [i["id"] for i in issues],
+            "ranges": [[i["start_frame"], i["end_frame"]] for i in issues], "frames_approved": approved,
+            "open_issues": sum(1 for i in store.list_issues(track_id) if not i.get("review"))}
+
+
 @router.post("/tracks/{track_id}/absent")
 def mark_track_absent(track_id: int, req: AbsentRequest):
     eng = _engine(); _track_loaded(eng, track_id)
@@ -574,7 +674,7 @@ def list_video_tracks():
                     "coverage": {"first": min(propagated) if propagated else None,
                                  "last": max(propagated) if propagated else None,
                                  "count": len(propagated)},
-                    "issue_count": len(store.list_issues(track.id)),
+                    "issue_count": sum(1 for i in store.list_issues(track.id) if not i.get("review")),
                     "job": job.snapshot() if job else None})
     return out
 
@@ -625,6 +725,92 @@ def _overlay(path: str, track_id: Optional[int], frame: int, grid: bool, preview
 def render_frame(frame: int, track_id: Optional[int] = None, grid: bool = False, preview_id: Optional[str] = None):
     image = _image_for_frame(frame)
     return Response(_overlay(image.path, track_id, frame, grid, preview_id), media_type="image/png")
+
+
+def _crop_box(boxes: list, w: int, h: int, pad: float = 0.35, min_side: int = 96) -> tuple[int, int, int, int]:
+    x0 = min(b[0] for b in boxes); y0 = min(b[1] for b in boxes)
+    x1 = max(b[2] for b in boxes); y1 = max(b[3] for b in boxes)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    hw = max((x1 - x0) * (1 + 2 * pad), min_side) / 2; hh = max((y1 - y0) * (1 + 2 * pad), min_side) / 2
+    return (int(max(0, cx - hw)), int(max(0, cy - hh)), int(min(w, cx + hw)), int(min(h, cy + hh)))
+
+
+def _outline(m: np.ndarray, rgb: tuple[int, int, int]) -> Image.Image:
+    a = np.asarray(_mask_layer(m, rgb)).copy()
+    a[..., 3] = np.where(a[..., 3] == 255, 255, 0)  # edge only: the object's own colors stay visible
+    return Image.fromarray(a, "RGBA")
+
+
+def _panel(path: str, crop, mask: Optional[np.ndarray], title: str, box=None, height: int = 300) -> Image.Image:
+    im = Image.open(path).convert("RGBA")
+    if mask is not None:
+        im = Image.alpha_composite(im, _outline(mask, (255, 0, 200)))
+    d = ImageDraw.Draw(im)
+    if box is not None:
+        d.rectangle(box, outline=(0, 230, 255), width=2)
+    im = im.crop(crop).convert("RGB")
+    im = im.resize((max(1, round(im.width * height / im.height)), height), Image.LANCZOS)
+    d = ImageDraw.Draw(im)
+    d.rectangle((0, 0, 8 + 7 * len(title), 18), fill=(0, 0, 0))
+    d.text((4, 3), title, fill="white")
+    return im
+
+
+@router.get("/render/zoom")
+def render_zoom(frame: int, track_id: Optional[int] = None, preview_id: Optional[str] = None,
+                box: Optional[str] = None):
+    """Close-up without fill: [nearest keyframe of the track] [frame plain] [frame + outline].
+    The keyframe panel answers "same object?", the outline panel "whole object?"."""
+    image = _image_for_frame(frame)
+    store = get_store()
+    prompt = [float(v) for v in box.split(",")] if box else None
+    mask, ref = None, None
+    if preview_id:
+        p = _PREVIEWS.get(preview_id)
+        path = _previews_dir() / f"{preview_id}.png"
+        if p is not None:
+            mask = p.mask
+        elif preview_id.isalnum() and path.exists():  # expired from memory (e.g. a replay): from disk
+            mask = np.array(Image.open(path)) > 0
+        else:
+            raise HTTPException(404, "Preview not found")
+    elif track_id is not None:
+        anns = [a for a in store.list_annotations(image.id) if a.track_id == track_id and a.mask_rle]
+        if anns:
+            mask = rle_to_mask(anns[0].mask_rle).astype(bool)
+    if track_id is not None:
+        kfs = [(ann, img) for ann, img in store.list_track_annotations(track_id)
+               if ann.source != "propagated" and ann.mask_rle and img.order_index != frame]
+        if kfs:
+            ref = min(kfs, key=lambda k: abs(k[1].order_index - frame))
+    boxes = [b for b in (mask_to_bbox(mask) if mask is not None and mask.any() else None, prompt) if b]
+    title = f"frame {frame} mask outline"
+    if not boxes and track_id is not None:
+        # no mask here (lost, absent, untracked): look where the track last had the object
+        near = [(img.order_index, ann.bbox_xyxy) for ann, img in store.list_track_annotations(track_id)
+                if ann.bbox_xyxy and img.order_index != frame]
+        if near:
+            f2, b2 = min(near, key=lambda n: abs(n[0] - frame))
+            boxes = [b2]
+            title = f"frame {frame}: NO MASK (crop at frame {f2}'s object)"
+    if not boxes:
+        boxes = [[0, 0, image.width, image.height]]
+        title = f"frame {frame}: NO MASK"
+    crop = _crop_box(boxes, image.width, image.height, pad=0.6 if mask is None or not mask.any() else 0.35)
+    panels = []
+    if ref is not None:
+        kann, kimg = ref
+        km = rle_to_mask(kann.mask_rle).astype(bool)
+        panels.append(_panel(kimg.path, _crop_box([mask_to_bbox(km)], kimg.width, kimg.height), None,
+                             f"keyframe {kimg.order_index} (reference)"))
+    panels.append(_panel(image.path, crop, None, f"frame {frame}"))
+    panels.append(_panel(image.path, crop, mask, title, prompt))
+    out = Image.new("RGB", (sum(p.width for p in panels) + 6 * (len(panels) - 1), panels[0].height), "#222")
+    x = 0
+    for p in panels:
+        out.paste(p, (x, 0)); x += p.width + 6
+    buf = io.BytesIO(); out.save(buf, format="PNG")
+    return Response(buf.getvalue(), media_type="image/png")
 
 
 _SHEET_COLORS = {"keyframe": (255, 220, 20), "ok": (60, 200, 90), "review": (255, 140, 0),

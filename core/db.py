@@ -140,6 +140,9 @@ def init_db(db_path: str) -> None:
                 n_lost INTEGER NOT NULL DEFAULT 0,
                 reasons_json TEXT,
                 signals_json TEXT,
+                review TEXT,  -- NULL = open, 'ok' = checked, mask is right
+                reviewed_by TEXT,
+                review_note TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
             )
@@ -275,11 +278,18 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
             n_lost INTEGER NOT NULL DEFAULT 0,
             reasons_json TEXT,
             signals_json TEXT,
+            review TEXT,  -- NULL = open, 'ok' = checked, mask is right
+            reviewed_by TEXT,
+            review_note TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (track_id) REFERENCES tracks(id) ON DELETE CASCADE
         )
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_issues_track ON issues(track_id)")
+    have = {r[1] for r in cur.execute("PRAGMA table_info(issues)")}
+    for col in ("review", "reviewed_by", "review_note"):
+        if col not in have:
+            cur.execute(f"ALTER TABLE issues ADD COLUMN {col} TEXT")
 
 
 def _set_kv(conn: sqlite3.Connection, key: str, value: str) -> None:

@@ -6,9 +6,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { AgentPanel } from '../../agent/AgentPanel';
-import { useAgentStore } from '../../agent/agentStore';
-import { cn } from '@/lib/utils';
 
 export function Sidebar() {
   const {
@@ -21,8 +18,6 @@ export function Sidebar() {
   } = useProjectStore();
 
   const currentImage = images[currentImageIndex];
-  // The annotation list makes room when Muse's steps are open.
-  const agentLogOpen = useAgentStore((s) => s.run != null && s.logOpen && !(s.dismissed && s.run.status !== 'running'));
   const [jumpValue, setJumpValue] = useState(String(currentImageIndex + 1));
 
   useEffect(() => {
@@ -116,7 +111,7 @@ export function Sidebar() {
       </div>
 
       {/* Annotation list */}
-      <div className={cn('overflow-hidden flex flex-col', agentLogOpen ? 'shrink-0 max-h-[34%]' : 'flex-1 min-h-0')}>
+      <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
         <div className="p-4 pb-2">
           <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
             <span>Annotations</span>
@@ -129,7 +124,6 @@ export function Sidebar() {
         </div>
       </div>
 
-      <AgentPanel />
     </aside>
   );
 }

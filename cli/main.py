@@ -81,10 +81,18 @@ class Api:
                 headers["X-AgentSeg-Command"] = command[:240]
         if headers:
             kw["headers"] = headers
-        try:
-            r = self.http.request(method, path, **kw)
-        except httpx.TransportError as exc:
-            raise CliError(f"backend not reachable at {self.base} ({exc.__class__.__name__}); run `agentseg up`")
+        for attempt in range(3):
+            try:
+                r = self.http.request(method, path, **kw)
+                break
+            except (httpx.ReadError, httpx.RemoteProtocolError, httpx.ConnectError) as exc:
+                # a pooled connection the server just closed (keep-alive race) or a busy moment: retry
+                if attempt == 2:
+                    raise CliError(f"backend not reachable at {self.base} ({exc.__class__.__name__}); "
+                                   "run `agentseg status`")
+                time.sleep(1.0 + 2 * attempt)
+            except httpx.TransportError as exc:
+                raise CliError(f"backend not reachable at {self.base} ({exc.__class__.__name__}); run `agentseg up`")
         if r.status_code >= 400:
             try:
                 detail = r.json().get("detail", r.text)
@@ -210,7 +218,7 @@ def _frames(spec: str) -> list[int]:
 def _compact_issue(i: dict) -> dict:
     out = {"id": i.get("id"), "start": i.get("start_frame", i.get("start")),
            "end": i.get("end_frame", i.get("end"))}
-    keep = ("worst_frame", "kind", "n_frames", "n_lost", "reasons")
+    keep = ("worst_frame", "kind", "n_frames", "n_lost", "reasons", "review")
     return {**out, **{k: i[k] for k in keep if k in i}}
 
 
@@ -391,7 +399,7 @@ def _start_backend(api: Api, a) -> dict | str:
         return "already running"
     log = (HOME / "backend.log").resolve()
     pid = _spawn([sys.executable, "-m", "uvicorn", "backend.main:app", "--host", a.host,
-                  "--port", str(_port(api.base))], REPO, log,
+                  "--port", str(_port(api.base)), "--timeout-keep-alive", "120"], REPO, log,
                  {"PYTHONPATH": str(REPO), "SAM_SERVER_URL": SAM_URL, "VIDEO_CLOSE_STALE_SESSIONS": "1"})
     print(f"starting backend (pid {pid}, log {log}) ...", file=sys.stderr)
     _wait(lambda: _alive(f"{api.base}/api/health"), 120, "backend", pid, log)
@@ -437,6 +445,10 @@ def _api_key_source(api: Api) -> str:
 
 
 def cmd_down(api: Api, a) -> dict:
+    if os.environ.get("AGENTSEG_AGENT_RUN"):
+        raise CliError("refusing `down` inside an agent run: the backend hosts this run and stopping it ends "
+                       "the run. If sam_server failed (e.g. CUDA out of memory from another GPU job), wait "
+                       "30-60 s and retry the failed command; if it keeps failing, stop and report it", 2)
     out = {"backend": {"stopped": _stop_port(_port(api.base), "backend")}}
     if a.all:
         # Give the backend's sam3 sessions back before the server goes; harmless if it is already down.
@@ -489,9 +501,35 @@ def _views() -> Path:
     return HOME / "views"
 
 
+def _zoom(api: Api, frame: int, out_dir, track=None, preview=None, box=None) -> Path:
+    params, name = {"frame": frame}, f"zoom_{frame:05d}"
+    if track is not None:
+        params["track_id"] = track; name += f"_t{track}"
+    if preview:
+        params["preview_id"] = preview; name += f"_{preview}"
+    if box:
+        params["box"] = ",".join(str(round(v)) for v in box)
+    return api.png("/api/video/render/zoom", params, Path(out_dir or _views()) / f"{name}.png")
+
+
+ZOOM_LEGEND = ("close-up, no fill: [keyframe = what the object looks like] [this frame] [this frame with the "
+               "mask outline in magenta, prompt box in cyan]. Same object? (color, body shape, details vs the "
+               "keyframe) Whole object? (outline hugs every edge: both ends, wheels/limbs, roof; nothing of "
+               "the object outside it, nothing else inside it)")
+
+
 def cmd_view(api: Api, a) -> dict:
     _activity(api, "frame.started", action="inspect_frame", status="running",
                   frame=a.frame, track_id=a.track, message=f"Inspecting frame {a.frame + 1}")
+    if a.zoom:
+        if a.track is None and not a.preview:
+            raise CliError("--zoom needs --track T or --preview P", 2)
+        path = _zoom(api, a.frame, a.out, a.track, a.preview)
+        artifact = _artifact(api, path, kind="zoom", frame=a.frame, track_id=a.track)
+        _activity(api, "artifact.created", action="inspect_frame", status="completed", frame=a.frame,
+                  track_id=a.track, artifact=artifact, message=f"Close-up of frame {a.frame + 1}")
+        return {"frame": a.frame, "image": str(path), **({"artifact": artifact} if artifact else {}),
+                "legend": ZOOM_LEGEND}
     params = {"frame": a.frame, "grid": a.grid}
     name = f"frame_{a.frame:05d}"
     if a.track is not None:
@@ -546,16 +584,21 @@ def cmd_segment(api: Api, a) -> dict:
     path = api.png("/api/video/render/frame", params,
                    Path(a.out or _views()) / f"preview_{a.frame:05d}_{res['preview_id']}.png")
     artifact = _artifact(api, path, kind="mask_preview", frame=a.frame, preview_id=res["preview_id"])
+    zoom = _zoom(api, a.frame, a.out, a.track, res["preview_id"], box)
     _activity(api, "mask.proposed", action="segment", status="completed", frame=a.frame,
                   preview_id=res["preview_id"], bbox=res.get("bbox"), score=res.get("score"),
                   render_url=(f"/api/video/render/frame?frame={a.frame}"
                               f"&preview_id={res['preview_id']}"),
                   artifact=artifact, message="Mask proposal is ready for inspection")
-    return {**res, "image": str(path),
+    check = res.get("check") or {}
+    nxt = ("look at BOTH images (the zoom shows the edges). Accept only if the outline covers the whole "
+           "object; then use the preview_id with `track create` or `track refine --preview`. Otherwise re-run "
+           "segment: box around ALL of the object, --pos on the parts the mask misses, --neg on what leaks in")
+    if check.get("warning"):
+        nxt = "WARNING: " + check["warning"] + ". " + nxt
+    return {**res, "image": str(path), "zoom": str(zoom),
             **({"artifact": artifact} if artifact else {}),
-            "next": "look at the image; if the yellow mask is right use the preview_id with "
-                    "`track create` or `track refine --preview`, otherwise re-run segment with "
-                    "a better --box and/or --pos/--neg points"}
+            "zoom_legend": ZOOM_LEGEND, "next": nxt}
 
 
 def _track_summary(t: dict) -> dict:
@@ -592,10 +635,13 @@ def cmd_track_create(api: Api, a) -> dict:
     return {**res, "next": f"run `agentseg track propagate {res['track_id']}`"}
 
 
-def _propagate(api: Api, tid: int, full=False, start=None, end=None, wait=True) -> dict:
+MAX_LOST = 60  # empty frames in a row before a tracking direction stops and hands back
+
+
+def _propagate(api: Api, tid: int, full=False, start=None, end=None, wait=True, max_lost=MAX_LOST) -> dict:
     _activity(api, "track.started", action="propagate", status="running", track_id=tid,
                   message=f"Propagating track {tid}")
-    body = {"full": full}
+    body = {"full": full, "max_lost": max_lost}
     if start is not None: body["start"] = start
     if end is not None: body["end"] = end
     job = api.post(f"/api/video/tracks/{tid}/propagate", body)
@@ -630,6 +676,14 @@ def _propagate(api: Api, tid: int, full=False, start=None, end=None, wait=True) 
                               message=f"Propagating track {tid}: frame {int(ev.get('frame', 0)) + 1}")
                 if frames % 50 == 0:
                     print(f"  propagated {frames}/{total} frames ({time.time() - t0:.0f}s)", file=sys.stderr)
+            elif ev["type"] == "lost":
+                print(f"  lost the object from frame {ev.get('lost_from')} (tracking from keyframe "
+                      f"{ev.get('keyframe')} {ev.get('direction')}); stopped at {ev.get('stopped_at')}",
+                      file=sys.stderr)
+                _activity(api, "track.lost", action="propagate", status="running", track_id=tid,
+                          frame=ev.get("lost_from"), keyframe=ev.get("keyframe"), direction=ev.get("direction"),
+                          stopped_at=ev.get("stopped_at"), untracked=ev.get("untracked"),
+                          message=f"Lost the object at frame {int(ev.get('lost_from') or 0) + 1}; stopped tracking")
             elif ev["type"] == "error":
                 raise CliError(f"propagation failed: {ev.get('message')}")
         flush_batch()
@@ -640,17 +694,27 @@ def _propagate(api: Api, tid: int, full=False, start=None, end=None, wait=True) 
     if job["status"] != "finished":
         raise CliError(f"propagation ended with status {job['status']}: {job.get('error')}")
     issues = [_compact_issue(i) for i in api.get(f"/api/video/tracks/{tid}/issues")]
+    lost = job.get("lost") or []
     _activity(api, "track.finished", action="propagate", status="completed", track_id=tid,
                   progress={"done": job["counts"]["frames"], "total": total},
-                  issues=issues, message=f"Track {tid} propagation finished")
+                  issues=issues, lost=lost, message=f"Track {tid} propagation finished")
+    if lost:
+        nxt = ("tracking LOST the object and stopped (see `lost`; `untracked` frames have no mask yet). "
+               "For each: `agentseg sheet --frames <lost_from-5>-<lost_from+40>` (no --track) to see where "
+               "the object really is. Object gone (occlusion, cut, out of frame): `track absent` that range "
+               "and keyframe it where it comes back. Object still visible: the tracker dropped it, add a "
+               "keyframe on a clear frame just after lost_from. Then propagate again.")
+    elif issues:
+        nxt = "inspect each issue's worst_frame with `agentseg view <frame> --track %d --zoom`" % tid
+    else:
+        nxt = "no issues: check `agentseg sheet --track %d` then export" % tid
     return {"track_id": tid, "frame_range": [lo, hi], "frames_written": job["counts"]["frames"],
-            "seconds": round(time.time() - t0, 1), "issues": issues,
-            "next": ("no issues: check `agentseg sheet --track %d` then export" % tid) if not issues else
-                    "inspect each issue's worst_frame with `agentseg view <frame> --track %d --grid`" % tid}
+            "seconds": round(time.time() - t0, 1), **({"lost": lost} if lost else {}), "issues": issues,
+            "next": nxt}
 
 
 def cmd_track_propagate(api: Api, a) -> dict:
-    return _propagate(api, a.track, a.full, a.start, a.end, not a.no_wait)
+    return _propagate(api, a.track, a.full, a.start, a.end, not a.no_wait, a.max_lost)
 
 
 def cmd_track_issues(api: Api, a) -> dict:
@@ -658,6 +722,16 @@ def cmd_track_issues(api: Api, a) -> dict:
     _activity(api, "issue.review", action="review_issues", status="completed", track_id=a.track,
                   count=len(raw), message=f"Reviewed {len(raw)} issue(s) for track {a.track}")
     return {"track_id": a.track, "issues": raw if a.verbose else [_compact_issue(i) for i in raw]}
+
+
+def cmd_track_review(api: Api, a) -> dict:
+    ids = None if a.issues == "all" else [int(x) for x in a.issues.split(",") if x.strip()]
+    res = api.post(f"/api/video/tracks/{a.track}/issues/review", {"issue_ids": ids, "by": "agent", "note": a.note})
+    _activity(api, "issue.reviewed", action="review_issues", status="completed", track_id=a.track,
+              issue_ids=res["reviewed"], ranges=res["ranges"], note=a.note,
+              message=f"Checked issue(s) {', '.join(map(str, res['reviewed'])) or '-'}: masks are right")
+    return {**res, "next": "export when open_issues is 0" if not res["open_issues"] else
+            "inspect the remaining issues"}
 
 
 def cmd_track_refine(api: Api, a) -> dict:
@@ -820,6 +894,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--track", type=int, help="only this track's masks")
     s.add_argument("--grid", action="store_true", help="draw a 50 px pixel-coordinate grid")
     s.add_argument("--preview", help="overlay a segment preview")
+    s.add_argument("--zoom", action="store_true",
+                   help="close-up, outline only, next to the track's nearest keyframe (needs --track or --preview)")
     s.add_argument("--out", help="output folder (default .agentseg/views)")
     s.set_defaults(fn=cmd_view)
 
@@ -836,6 +912,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--pos", action="append", metavar="X,Y", help="positive click (repeatable)")
     s.add_argument("--neg", action="append", metavar="X,Y", help="negative click (repeatable)")
     s.add_argument("--no-grid", action="store_true", help="render the preview without the grid")
+    s.add_argument("--track", type=int, help="track this keyframe is for: the zoom shows its keyframe for comparison")
     s.add_argument("--out")
     s.set_defaults(fn=cmd_segment)
 
@@ -853,12 +930,20 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--full", action="store_true", help="regenerate every frame, not just the dirty range")
     t.add_argument("--start", type=int); t.add_argument("--end", type=int)
     t.add_argument("--no-wait", action="store_true", help="return right after starting the job")
+    t.add_argument("--max-lost", type=int, default=MAX_LOST,
+                   help=f"stop a direction after N empty frames in a row (default {MAX_LOST}, 0 = never)")
     t.set_defaults(fn=cmd_track_propagate)
 
     t = ts.add_parser("issues", help="list health issues of a track")
     t.add_argument("track", type=int)
     t.add_argument("--verbose", action="store_true", help="include raw signals")
     t.set_defaults(fn=cmd_track_issues)
+
+    t = ts.add_parser("review", help="mark issues you checked as fine (their frames become approved)")
+    t.add_argument("track", type=int)
+    t.add_argument("issues", help="issue ids, e.g. 2,5, or 'all' for every open issue")
+    t.add_argument("--note", help="one line why the masks are right")
+    t.set_defaults(fn=cmd_track_review)
 
     t = ts.add_parser("refine", help="add/replace a keyframe at FRAME, then re-propagate")
     t.add_argument("track", type=int); t.add_argument("frame", type=int)

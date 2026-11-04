@@ -12,6 +12,17 @@ export type FrameStatus = 'keyframe' | 'ok' | 'review' | 'absent' | 'empty';
 export type RunStatus = 'running' | 'done' | 'failed' | 'stopped';
 export type ActivityKind = 'thinking' | 'acting' | 'computing' | 'idle';
 
+/** The stages of a labeling run, in order; the run log groups its steps by them. */
+export type Phase = 'find' | 'mask' | 'track' | 'review' | 'export';
+export const PHASES: Phase[] = ['find', 'mask', 'track', 'review', 'export'];
+export const PHASE_NAMES: Record<Phase, string> = {
+  find: 'Find the object',
+  mask: 'First mask',
+  track: 'Track',
+  review: 'Review issues',
+  export: 'Export',
+};
+
 export interface FeedItem {
   id: string;
   kind: 'thought' | 'step' | 'report' | 'error';
@@ -19,6 +30,22 @@ export interface FeedItem {
   meta?: string;
   state?: 'running' | 'done' | 'failed';
   ts: number;
+  phase?: Phase;          // set on steps; a sentence belongs to the step it introduces
+  frame?: number;         // the frame the step is about (the run log links to it)
+  frames?: number[];      // an overview's frames
+}
+
+/** A spot SAM flagged after tracking, and what the agent did about it. */
+export interface IssueView {
+  key: string;
+  trackId: number;
+  id?: number;
+  start: number;
+  end: number;
+  worst: number;
+  kind?: string;
+  state: 'open' | 'reviewed' | 'fixed';
+  note?: string;
 }
 
 /** One box prompt on the canvas: cursor drags the box, clicks the points, SAM answers. */
@@ -59,6 +86,14 @@ export interface SheetView {
   t0: number;
 }
 
+/** A close-up the agent opened (`view --zoom`, or the zoom `segment` writes). */
+export interface ZoomView {
+  frame: number;
+  trackId?: number;
+  previewId?: string;
+  t0: number;
+}
+
 /** The tool call the agent is running now (or ran last), as the bubble shows it. */
 export interface AgentAction {
   id: string;
@@ -92,6 +127,7 @@ export interface AgentRun {
   status: RunStatus;
   startedAt: number;      // event clock (seconds)
   endedAt?: number;
+  usage?: { calls?: number; input_tokens?: number; output_tokens?: number };
 }
 
 export interface ReplayState {
@@ -114,6 +150,7 @@ interface AgentState {
   focusFrame: number | null;
   focusSeq: number;       // bumps on every focus request, so re-focusing the same frame still follows
   sheet: SheetView | null;
+  zoom: ZoomView | null;
   tracks: Record<number, TrackView>;
   recentLabel: { name: string; id?: number; t0: number } | null;
   replay: ReplayState | null;
@@ -122,6 +159,8 @@ interface AgentState {
   action: AgentAction | null;
   cursor: CursorCue | null;
   logOpen: boolean;
+  phase: Phase | null;
+  issues: IssueView[];
 
   reset: (run: AgentRun | null) => void;
   patch: (fn: (s: AgentState) => Partial<AgentState>) => void;
@@ -139,6 +178,7 @@ export const useAgentStore = create<AgentState>()((set) => ({
   focusFrame: null,
   focusSeq: 0,
   sheet: null,
+  zoom: null,
   tracks: {},
   recentLabel: null,
   replay: null,
@@ -147,6 +187,8 @@ export const useAgentStore = create<AgentState>()((set) => ({
   action: null,
   cursor: null,
   logOpen: false,
+  phase: null,
+  issues: [],
 
   reset: (run) => set((s) => ({
     run,
@@ -155,11 +197,14 @@ export const useAgentStore = create<AgentState>()((set) => ({
     beat: null,
     focusFrame: null,
     sheet: null,
+    zoom: null,
     tracks: {},
     recentLabel: null,
     dismissed: false,
     action: null,
     cursor: null,
+    phase: null,
+    issues: [],
     replay: s.replay,
   })),
   patch: (fn) => set((s) => fn(s)),
